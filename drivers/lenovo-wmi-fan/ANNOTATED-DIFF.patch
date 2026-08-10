@@ -1,13 +1,10 @@
 # Annotated unified diff for drivers/lenovo-wmi-fan/wmi-other.c.
 # Base: OpenGamingCollective Linux commit 9c37615c0efca8ec4c7d461ef7ae2f4806951ace.
-# Scope: project changes only; unchanged upstream source is not included separately.
-# This is an annotated review artifact, not an applyable patch.
-# The comments between hunks explain the project change and its rationale.
+# Review artifact; do not apply as a patch. Each Why comment applies to the next hunk.
 
 --- a/drivers/platform/x86/lenovo/wmi-other.c
 +++ b/drivers/platform/x86/lenovo/wmi-other.c
-# Change: Add project attribution.
-# Rationale: The upstream file already has copyright and module-author notices.
+# Why: The upstream file already has copyright and module-author notices.
 @@ -24,6 +24,9 @@
   * Copyright (C) 2025 Rong Zhang <i@rong.moe>
   *   - HWMON
@@ -18,8 +15,7 @@
   */
  
  #include <linux/acpi.h>
-# Change: Add helpers for DMI, locking, memory, strings, and unaligned data.
-# Rationale: Fan Method framing and safe removal require these kernel interfaces.
+# Why: Fan Method framing and safe removal require these kernel interfaces.
 @@ -32,17 +35,23 @@
  #include <linux/component.h>
  #include <linux/container_of.h>
@@ -44,8 +40,7 @@
  #include <linux/wmi.h>
  
  #include <acpi/battery.h>
-# Change: Declare Fan Method WMI identifiers.
-# Rationale: Curve control uses a different WMI object and methods than Other Mode.
+# Why: Curve control uses a different WMI object and methods than Other Mode.
 @@ -53,7 +62,11 @@
  #include "../firmware_attributes_class.h"
  
@@ -58,8 +53,7 @@
  enum lwmi_feature_id_cpu {
  	LWMI_FEATURE_ID_CPU_SPPT =	0x01,
  	LWMI_FEATURE_ID_CPU_SPL =	0x02,
-# Change: Define Full Speed and RPM capability identifiers.
-# Rationale: Full Speed and tachometer status need typed feature handling.
+# Why: Full Speed and tachometer status need typed feature handling.
 @@ -83,7 +96,9 @@
  	LWMI_FEATURE_ID_PSU_CHARGE_BEHAVIOUR =	0x02,
  };
@@ -70,8 +64,7 @@
  
  #define LWMI_TYPE_ID_CROSSLOAD	0x01
  #define LWMI_TYPE_ID_PSU_AC	0x01
-# Change: Encode the Full Speed feature attribute.
-# Rationale: Other Mode methods 17 and 18 require the fan feature identifier.
+# Why: Other Mode methods 17 and 18 require the fan feature identifier.
 @@ -102,6 +117,10 @@
  #define LWMI_CHARGE_TYPE_STANDARD	0x00
  #define LWMI_CHARGE_TYPE_LONGLIFE	0x01
@@ -83,8 +76,7 @@
  #define LWMI_ATTR_ID_FAN_RPM(x)                                   \
  	lwmi_attr_id(LWMI_DEVICE_ID_FAN, LWMI_FEATURE_ID_FAN_RPM, \
  		     LWMI_GZ_THERMAL_MODE_NONE, LWMI_FAN_ID(x))
-# Change: Add handheld matching plus complete curve validation and serialization helpers.
-# Rationale: The Fan Method GUID is not handheld-exclusive, and the firmware transport is a complete ten-point table.
+# Why: The Fan Method GUID is not handheld-exclusive, and the firmware transport is a complete ten-point table.
 @@ -112,7 +131,155 @@
  
  #define LWMI_OM_SYSFS_NAME "lenovo-wmi-other"
@@ -241,8 +233,7 @@
  static DEFINE_IDA(lwmi_om_ida);
  
  enum attribute_property {
-# Change: Add interface-specific private state.
-# Rationale: Other Mode and Fan Method have separate lifecycles and removal locks.
+# Why: Other Mode and Fan Method have separate lifecycles and removal locks.
 @@ -131,6 +298,7 @@
  };
  
@@ -251,8 +242,7 @@
  	struct component_master_ops *ops;
  
  	/* only valid after capdata bind */
-# Change: Track Full Speed and RPM fallback state.
-# Rationale: Sysfs and hwmon visibility must match supported handheld capability.
+# Why: Sysfs and hwmon visibility must match supported handheld capability.
 @@ -144,6 +312,11 @@
  	int ida_id;
  
@@ -265,8 +255,7 @@
  
  	struct {
  		bool capdata00_collected : 1;
-# Change: Add Fan Method device state.
-# Rationale: Curve WMI calls must be serialized and rejected during removal.
+# Why: Curve WMI calls must be serialized and rejected during removal.
 @@ -154,6 +327,14 @@
  	const struct power_supply_ext *battery_ext;
  	struct acpi_battery_hook battery_hook;
@@ -282,8 +271,7 @@
  };
  
  /*
-# Change: Expose hwmon RPM fallback only when needed.
-# Rationale: Userspace needs actual fan RPM when the native capability path is absent.
+# Why: Userspace needs actual fan RPM when the native capability path is absent.
 @@ -256,6 +437,10 @@
  	bool visible = false;
  
@@ -295,8 +283,7 @@
  		if (!(priv->fan_info[channel].supported & LWMI_SUPP_VALID))
  			return 0;
  
-# Change: Reject an unavailable fallback RPM value.
-# Rationale: A sentinel is not a valid RPM reading.
+# Why: A sentinel is not a valid RPM reading.
 @@ -329,6 +514,8 @@
  			err = lwmi_om_fan_get_set(priv, channel, &retval, false);
  			if (err)
@@ -306,8 +293,7 @@
  
  			*val = retval;
  			return 0;
-# Change: Reset and compute RPM fallback state with capability data.
-# Rationale: Probe and unbind must not retain stale hwmon visibility.
+# Why: Probe and unbind must not retain stale hwmon visibility.
 @@ -459,6 +646,7 @@
  		dev_warn(&priv->wdev->dev, "fan RPM constraint relaxed. Use with caution\n");
  
@@ -316,8 +302,7 @@
  	for (i = 0; i < LWMI_FAN_NR; i++) {
  		if (!(priv->fan_info[i].supported & LWMI_SUPP_VALID))
  			continue;
-# Change: Enable fallback RPM on supported handhelds only.
-# Rationale: The fallback must not alter non-handheld Lenovo devices.
+# Why: The fallback must not alter non-handheld Lenovo devices.
 @@ -473,6 +661,13 @@
  			valid--;
  		}
@@ -332,8 +317,7 @@
  
  	if (valid == 0) {
  		dev_warn(&priv->wdev->dev,
-# Change: Clear RPM fallback state on capability reset.
-# Rationale: Later probing must recompute the visible interface.
+# Why: Later probing must recompute the visible interface.
 @@ -538,6 +733,7 @@
  
  	priv->fan_flags.capdata00_collected = false;
@@ -342,8 +326,7 @@
  }
  
  /**
-# Change: Add Full Speed, Fan Method curve, and their probe/remove paths.
-# Rationale: Full Speed, curve, and RPM use independent firmware routes and need bounded typed sysfs interfaces.
+# Why: Full Speed, curve, and RPM use independent firmware routes and need bounded typed sysfs interfaces.
 @@ -588,8 +784,251 @@
  out:
  	priv->fan_flags.capdata_fan_collected = true;
@@ -596,8 +579,7 @@
  /* ======== Power Supply Extension (component: lenovo-wmi-capdata 00) ======== */
  
  /**
-# Change: Correct the thermal-mode comment.
-# Rationale: The code uses the thermal-mode notifier, not a GameZone driver query.
+# Why: The code uses the thermal-mode notifier, not a GameZone driver query.
 @@ -978,7 +1417,7 @@
  /**
   * tunable_attr_01_id() - Formats a tunable_attr_01 to a capdata attribute ID
@@ -607,8 +589,7 @@
   *
   * Return: encoded capability data attribute ID.
   */
-# Change: Correct the custom-profile comment.
-# Rationale: The code uses the thermal-mode notifier, not a GameZone driver query.
+# Why: The code uses the thermal-mode notifier, not a GameZone driver query.
 @@ -1203,9 +1642,9 @@
   * @tunable_attr: The attribute to be stored.
   *
@@ -622,8 +603,7 @@
   * any integer attribute's "_store" function. The integer to be sent to the WMI
   * method is range checked and an error code is returned if out of range.
   *
-# Change: Correct the profile-read comment.
-# Rationale: The code uses the thermal-mode notifier, not a GameZone driver query.
+# Why: The code uses the thermal-mode notifier, not a GameZone driver query.
 @@ -1265,8 +1704,8 @@
   * @tunable_attr: The attribute to be read.
   *
@@ -635,8 +615,7 @@
   * attribute's "_show" function.
   *
   * If the WMI is success the sysfs attribute is notified.
-# Change: Dispatch Other Mode and Fan Method WMI devices by interface type.
-# Rationale: One driver must own both exact GUIDs while preserving their separate probe and remove paths.
+# Why: One driver must own both exact GUIDs while preserving their separate probe and remove paths.
 @@ -1683,10 +2122,14 @@
  	.unbind = lwmi_om_master_unbind,
  };
@@ -653,8 +632,7 @@
  
  	priv = devm_kzalloc(&wdev->dev, sizeof(*priv), GFP_KERNEL);
  	if (!priv)
-# Change: Add handheld-gated Full Speed lifecycle and removal dispatch.
-# Rationale: Full Speed must be unavailable on unrelated devices and removed safely on errors or unbind.
+# Why: Full Speed must be unavailable on unrelated devices and removed safely on errors or unbind.
 @@ -1694,25 +2137,80 @@
  
  	/* Sentinel for on-demand ida_free(). */
@@ -741,8 +719,7 @@
  	{}
  };
  
-# Change: Register both WMI GUIDs and update module attribution and description.
-# Rationale: The module now owns both Other Mode and Fan Method interfaces.
+# Why: The module now owns both Other Mode and Fan Method interfaces.
 @@ -1734,5 +2232,6 @@
  MODULE_DEVICE_TABLE(wmi, lwmi_other_id_table);
  MODULE_AUTHOR("Derek J. Clark <derekjohn.clark@gmail.com>");
