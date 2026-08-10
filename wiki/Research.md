@@ -70,3 +70,114 @@ The Windows app does not yet provide complete raw requests for:
 - fan-curve WMI serialization.
 
 The [application document](research/Legion-Space-App.md) records the app values for these functions. The [driver document](research/Legion-Space-Driver.md) records the known native calls and the missing low-level fields.
+
+## Linux kernel upstream and contribution route — 2026-08-11
+
+The final upstream for both kernel components is the Linux kernel project. The
+OpenGamingCollective Linux repository is a downstream integration tree. It is
+useful for testing and coordination, but it is not the final acceptance route.
+
+### Lenovo Legion Go HID
+
+`drivers/hid/hid-lenovo-go.c` is in Linus's mainline tree, linux-next, and the
+HID maintainer tree. Derek J. Clark authored the original mainline driver. The
+current Lenovo HID maintainers are Derek J. Clark and Mark Pearson. The HID
+subsystem maintainers are Jiri Kosina and Benjamin Tissoires.
+
+Submit changes against the HID maintainer tree:
+
+- Tree: <https://git.kernel.org/pub/scm/linux/kernel/git/hid/hid.git>
+- List: `linux-input@vger.kernel.org`
+- Archive: <https://lore.kernel.org/linux-input/>
+- Patchwork: <https://patchwork.kernel.org/project/linux-input/list/>
+- Subject form: `HID: hid-lenovo-go: <change>`
+
+The accepted original driver is commit
+[`d69ccfcbc955`](https://github.com/torvalds/linux/commit/d69ccfcbc9551988190895bc125a8bf709aa5931).
+The current sysfs ABI document is
+[`Documentation/ABI/testing/sysfs-driver-hid-lenovo-go`](https://github.com/torvalds/linux/blob/master/Documentation/ABI/testing/sysfs-driver-hid-lenovo-go).
+
+### Lenovo WMI
+
+`drivers/platform/x86/lenovo/wmi-other.c` is in mainline Linux. The base driver
+entered mainline in commit
+[`edc4b183b794`](https://github.com/torvalds/linux/commit/edc4b183b794baefb54aa0baeb810fe3ac65d826).
+Standard capability-gated hwmon fan support entered in commit
+[`51ed34282f63`](https://github.com/torvalds/linux/commit/51ed34282f63fab5b3996477cc56135eb4de5284).
+
+Mainline does not contain this project's Fan Method GUID curve interface or
+Full Speed interface. The complete external replacement file is not a suitable
+submission unit. Reconstruct the work as small, incremental changes against the
+current in-tree driver.
+
+The Lenovo WMI maintainers are Mark Pearson and Derek J. Clark. The x86
+platform driver maintainers are Hans de Goede and Ilpo Järvinen.
+
+- Tree: <https://git.kernel.org/pub/scm/linux/kernel/git/pdx86/platform-drivers-x86.git>
+- List: `platform-driver-x86@vger.kernel.org`
+- Archive: <https://lore.kernel.org/platform-driver-x86/>
+- Patchwork: <https://patchwork.kernel.org/project/platform-driver-x86/list/>
+- Subject form: `platform/x86: lenovo-wmi-other: <change>`
+
+Run `scripts/get_maintainer.pl` on the final patches. New hwmon or sysfs
+interfaces can also require `linux-hwmon@vger.kernel.org`, its maintainers, and
+`linux-api@vger.kernel.org`. Do not select recipients from this document alone.
+
+### Required preparation
+
+The current project diffs are review artifacts, not submission patches. Before
+submission:
+
+1. Rebase each component on its current subsystem tree. Drop changes that are
+   already upstream.
+2. Reconstruct each logical change as one commit. Each commit must build and
+   work by itself.
+3. Preserve upstream authorship. Establish the human author and source
+   provenance for every added line.
+4. Add or update `Documentation/ABI/` for each userspace interface. Update the
+   applicable driver document.
+5. Use a standard hwmon interface when it can represent a fan function. Get
+   hwmon review before adding a custom fan sysfs ABI.
+6. Resolve the unexpected controller LED activation. Do not submit a series
+   with a known lifecycle regression.
+7. Add in-tree tests where practical. Keep live hardware evidence with the
+   cover letter or commit that it supports.
+
+The human submitter must review the complete series and add the human
+`Signed-off-by` trailer under the Developer Certificate of Origin. AI tools
+must not add this trailer. Current kernel guidance requires an `Assisted-by`
+trailer when an AI tool materially assisted the contribution. The submitter
+needs a known identity and a working email address because review is public and
+occurs by email.
+
+### Submission checklist
+
+For each series:
+
+- Run `scripts/checkpatch.pl --strict` and justify each remaining report.
+- Run sparse and `make checkstack`.
+- Build relevant configurations with the changed option set to `y`, `m`, and
+  `n`; also test `allnoconfig`, `allmodconfig`, and an `O=` output directory.
+- Build changed code with extra warnings, including `W=1`.
+- Build changed documentation with `make htmldocs`.
+- Build and test against current linux-next.
+- Run HID selftests and `hid-tools` checks for HID report changes.
+- Test probe, removal, unload and reload, suspend and resume, missing
+  capabilities, malformed firmware replies, concurrent access, and failure
+  cleanup.
+- Test on the Original Legion Go. State clearly that Legion Go 2 is not live
+  tested.
+- Run `scripts/get_maintainer.pl` on the generated patches.
+- Generate a cover letter for a series and include the exact base commit.
+- Send plain-text patches by email with `git send-email` or `b4`. Send a test
+  to yourself and confirm that `git am` applies it unchanged.
+- Reply to review inline. Send the complete series for each revision and put
+  the revision changes below the `---` separator.
+
+Official process sources:
+
+- [Submitting patches](https://docs.kernel.org/process/submitting-patches.html)
+- [Submission checklist](https://docs.kernel.org/process/submit-checklist.html)
+- [Email client requirements](https://docs.kernel.org/process/email-clients.html)
+- [AI coding assistants](https://docs.kernel.org/process/coding-assistants.html)
+- [B4 contributor workflow](https://b4.docs.kernel.org/en/latest/contributor/overview.html)
