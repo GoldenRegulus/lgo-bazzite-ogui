@@ -25,7 +25,7 @@ Read the applicable documents:
 
 Keep research and live validation separate.
 
-Do not store patch files. Store complete project source files based on the selected upstream source. Extend Lenovo fan support only in `wmi-other.c`; keep its sibling OGC owner files unchanged. Do not fetch or transfer a complete upstream kernel tree to the live device.
+Do not store applyable patch series. Per-driver annotated review diffs are allowed. Store complete project source files based on the selected upstream source. Extend Lenovo fan support only in `wmi-other.c`; keep its sibling OGC owner files unchanged. Do not fetch or transfer a complete upstream kernel tree to the live device.
 
 Record a work result in no more than three places: `.pi/PROJECT-ROLLUP.md`, the concise `README.md`, and one detail document. Do not copy run narratives into requirements, architecture, interface contracts, research, or unrelated component documents.
 

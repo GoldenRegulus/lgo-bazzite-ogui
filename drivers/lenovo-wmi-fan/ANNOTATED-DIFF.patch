@@ -1,0 +1,753 @@
+# Annotated unified diff for drivers/lenovo-wmi-fan/wmi-other.c.
+# Base: OpenGamingCollective Linux commit 9c37615c0efca8ec4c7d461ef7ae2f4806951ace.
+# Scope: project changes only; unchanged upstream source is not included separately.
+# This is an annotated review artifact, not an applyable patch.
+# The comments between hunks explain the project change and its rationale.
+
+--- a/drivers/platform/x86/lenovo/wmi-other.c
++++ b/drivers/platform/x86/lenovo/wmi-other.c
+# Change: Add project attribution.
+# Rationale: The upstream file already has copyright and module-author notices.
+@@ -24,6 +24,9 @@
+  * Copyright (C) 2025 Rong Zhang <i@rong.moe>
+  *   - HWMON
+  *   - binding to Capability Data 00 and Fan
++ *
++ * Copyright (C) 2026 GoldenRegulus
++ *   - Legion Go Fan Method controls
+  */
+ 
+ #include <linux/acpi.h>
+# Change: Add helpers for DMI, locking, memory, strings, and unaligned data.
+# Rationale: Fan Method framing and safe removal require these kernel interfaces.
+@@ -32,17 +35,23 @@
+ #include <linux/component.h>
+ #include <linux/container_of.h>
+ #include <linux/device.h>
++#include <linux/dmi.h>
+ #include <linux/export.h>
+ #include <linux/gfp_types.h>
+ #include <linux/hwmon.h>
+ #include <linux/idr.h>
+ #include <linux/kdev_t.h>
++#include <linux/kernel.h>
+ #include <linux/kobject.h>
+ #include <linux/limits.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/platform_profile.h>
+ #include <linux/power_supply.h>
++#include <linux/slab.h>
++#include <linux/string.h>
+ #include <linux/types.h>
++#include <linux/unaligned.h>
+ #include <linux/wmi.h>
+ 
+ #include <acpi/battery.h>
+# Change: Declare Fan Method WMI identifiers.
+# Rationale: Curve control uses a different WMI object and methods than Other Mode.
+@@ -53,7 +62,11 @@
+ #include "../firmware_attributes_class.h"
+ 
+ #define LENOVO_OTHER_MODE_GUID "DC2A8805-3A8C-41BA-A6F7-092E0089CD3B"
++#define LENOVO_FAN_METHOD_GUID "92549549-4BDE-4F06-AC04-CE8BF898DBAA"
+ 
++#define LENOVO_FAN_METHOD_GET_CURVE	5
++#define LENOVO_FAN_METHOD_SET_CURVE	6
++
+ enum lwmi_feature_id_cpu {
+ 	LWMI_FEATURE_ID_CPU_SPPT =	0x01,
+ 	LWMI_FEATURE_ID_CPU_SPL =	0x02,
+# Change: Define Full Speed and RPM capability identifiers.
+# Rationale: Full Speed and tachometer status need typed feature handling.
+@@ -83,7 +96,9 @@
+ 	LWMI_FEATURE_ID_PSU_CHARGE_BEHAVIOUR =	0x02,
+ };
+ 
++#define LWMI_FEATURE_ID_FAN_FULLSPEED 0x02
+ #define LWMI_FEATURE_ID_FAN_RPM 0x03
++#define LWMI_FAN_RPM_NORMAL_SUPPORT (LWMI_SUPP_VALID | LWMI_SUPP_GET)
+ 
+ #define LWMI_TYPE_ID_CROSSLOAD	0x01
+ #define LWMI_TYPE_ID_PSU_AC	0x01
+# Change: Encode the Full Speed feature attribute.
+# Rationale: Other Mode methods 17 and 18 require the fan feature identifier.
+@@ -102,6 +117,10 @@
+ #define LWMI_CHARGE_TYPE_STANDARD	0x00
+ #define LWMI_CHARGE_TYPE_LONGLIFE	0x01
+ 
++#define LWMI_ATTR_ID_FAN_FULLSPEED					\
++	lwmi_attr_id(LWMI_DEVICE_ID_FAN, LWMI_FEATURE_ID_FAN_FULLSPEED, \
++		     LWMI_GZ_THERMAL_MODE_NONE, LWMI_TYPE_ID_NONE)
++
+ #define LWMI_ATTR_ID_FAN_RPM(x)                                   \
+ 	lwmi_attr_id(LWMI_DEVICE_ID_FAN, LWMI_FEATURE_ID_FAN_RPM, \
+ 		     LWMI_GZ_THERMAL_MODE_NONE, LWMI_FAN_ID(x))
+# Change: Add handheld matching plus complete curve validation and serialization helpers.
+# Rationale: The Fan Method GUID is not handheld-exclusive, and the firmware transport is a complete ten-point table.
+@@ -112,7 +131,155 @@
+ 
+ #define LWMI_OM_SYSFS_NAME "lenovo-wmi-other"
+ #define LWMI_OM_HWMON_NAME "lenovo_wmi_other"
++
++/* Lenovo Legion Go fan pure helper code. */
++#define LENOVO_FAN_CURVE_POINTS	10
++#define LENOVO_FAN_CURVE_REPLY_SIZE	88
++#define LENOVO_FAN_CURVE_WRITE_SIZE	64
++#define LENOVO_FAN_CURVE_GO_MAX	125
++#define LENOVO_FAN_CURVE_GO2_MAX	115
++
++struct lenovo_fan_curve {
++	u16 speed[LENOVO_FAN_CURVE_POINTS];
++};
++
++struct lenovo_handheld_dmi {
++	u16 curve_max;
++};
++
++static const struct lenovo_handheld_dmi lenovo_handheld_go = {
++	.curve_max = LENOVO_FAN_CURVE_GO_MAX,
++};
++
++static const struct lenovo_handheld_dmi lenovo_handheld_go2 = {
++	.curve_max = LENOVO_FAN_CURVE_GO2_MAX,
++};
++
++static bool lenovo_handheld_dmi_match(const char *value,
++				      const char * const *matches,
++				      size_t count)
++{
++	size_t i;
++
++	if (!value)
++		return false;
++
++	for (i = 0; i < count; i++) {
++		if (!strcmp(value, matches[i]))
++			return true;
++	}
++
++	return false;
++}
++
++static const struct lenovo_handheld_dmi *
++lenovo_handheld_find(const char *vendor, const char *product_name,
++		     const char *product_version)
++{
++	static const char * const go2_product_names[] = { "83N0", "83N1" };
++	static const char * const go2_product_versions[] = {
++		"Legion Go 8ASP2", "Legion Go 8AHP2",
++	};
++	bool go_name;
++	bool go_version;
++
++	if (!vendor || strcmp(vendor, "LENOVO"))
++		return NULL;
++
++	go_name = product_name && !strcmp(product_name, "83E1");
++	go_version = product_version && !strcmp(product_version, "Legion Go 8APU1");
++	if (go_name || go_version)
++		return go_name && go_version ? &lenovo_handheld_go : NULL;
++
++	if (lenovo_handheld_dmi_match(product_name, go2_product_names,
++				      ARRAY_SIZE(go2_product_names)) ||
++	    lenovo_handheld_dmi_match(product_version, go2_product_versions,
++				      ARRAY_SIZE(go2_product_versions)))
++		return &lenovo_handheld_go2;
++
++	return NULL;
++}
++
++static bool lenovo_fan_curve_user_valid(const struct lenovo_fan_curve *curve,
++					u16 max)
++{
++	int i;
++
++	for (i = 0; i < LENOVO_FAN_CURVE_POINTS; i++) {
++		if (curve->speed[i] > max)
++			return false;
++		if (i && curve->speed[i] < curve->speed[i - 1])
++			return false;
++	}
++
++	return true;
++}
++
++static int lenovo_fan_curve_parse_reply(const void *data, size_t length, u16 max,
++					struct lenovo_fan_curve *curve)
++{
++	const u8 *buffer = data;
++	int i;
++
++	if (!data || length < LENOVO_FAN_CURVE_REPLY_SIZE)
++		return -ENODATA;
++	if (get_unaligned_le32(buffer) != LENOVO_FAN_CURVE_POINTS ||
++	    get_unaligned_le32(buffer + 44) != LENOVO_FAN_CURVE_POINTS)
++		return -ERANGE;
++
++	for (i = 0; i < LENOVO_FAN_CURVE_POINTS; i++) {
++		u32 speed = get_unaligned_le32(buffer + sizeof(u32) +
++					       i * sizeof(u32));
++
++		if (speed > max)
++			return -ERANGE;
++		curve->speed[i] = speed;
++	}
++
++	return 0;
++}
++
++static void lenovo_fan_curve_serialize(const struct lenovo_fan_curve *curve,
++				       u8 buffer[LENOVO_FAN_CURVE_WRITE_SIZE])
++{
++	static const u16 temperatures[LENOVO_FAN_CURVE_POINTS] = {
++		10, 20, 30, 40, 50, 60, 70, 80, 90, 100,
++	};
++	int i;
+ 
++	buffer[0] = 0xff;
++	buffer[1] = 0x01;
++	put_unaligned_le32(LENOVO_FAN_CURVE_POINTS, buffer + 2);
++	for (i = 0; i < LENOVO_FAN_CURVE_POINTS; i++)
++		put_unaligned_le16(curve->speed[i], buffer + 6 + i * sizeof(u16));
++	buffer[26] = 0x01;
++	put_unaligned_le32(LENOVO_FAN_CURVE_POINTS, buffer + 27);
++	for (i = 0; i < LENOVO_FAN_CURVE_POINTS; i++)
++		put_unaligned_le16(temperatures[i], buffer + 31 + i * sizeof(u16));
++	buffer[51] = 0x5a;
++	put_unaligned_le16(100, buffer + 53);
++}
++
++static int lenovo_fan_fullspeed_parse(u32 value, bool *enabled)
++{
++	if (value > 1)
++		return -ERANGE;
++
++	*enabled = value;
++	return 0;
++}
++
++/* End Lenovo Legion Go fan pure helper code. */
++
++enum lwmi_wmi_interface_type {
++	LWMI_WMI_OTHER,
++	LWMI_WMI_FAN_METHOD,
++};
++
++struct lwmi_wmi_priv {
++	enum lwmi_wmi_interface_type type;
++};
++
+ static DEFINE_IDA(lwmi_om_ida);
+ 
+ enum attribute_property {
+# Change: Add interface-specific private state.
+# Rationale: Other Mode and Fan Method have separate lifecycles and removal locks.
+@@ -131,6 +298,7 @@
+ };
+ 
+ struct lwmi_om_priv {
++	struct lwmi_wmi_priv interface;
+ 	struct component_master_ops *ops;
+ 
+ 	/* only valid after capdata bind */
+# Change: Track Full Speed and RPM fallback state.
+# Rationale: Sysfs and hwmon visibility must match supported handheld capability.
+@@ -144,6 +312,11 @@
+ 	int ida_id;
+ 
+ 	struct lwmi_fan_info fan_info[LWMI_FAN_NR];
++	struct mutex fan_fullspeed_lock; /* protects Full Speed and removal */
++	bool fan0_input_fallback;
++	bool handheld_supported;
++	bool fan_fullspeed_added;
++	bool fan_fullspeed_removing;
+ 
+ 	struct {
+ 		bool capdata00_collected : 1;
+# Change: Add Fan Method device state.
+# Rationale: Curve WMI calls must be serialized and rejected during removal.
+@@ -154,6 +327,14 @@
+ 	const struct power_supply_ext *battery_ext;
+ 	struct acpi_battery_hook battery_hook;
+ 	bool bh_registered;
++};
++
++struct lwmi_fan_priv {
++	struct lwmi_wmi_priv interface;
++	struct wmi_device *wdev;
++	const struct lenovo_handheld_dmi *handheld;
++	struct mutex lock; /* protects WMI calls and removal */
++	bool removing;
+ };
+ 
+ /*
+# Change: Expose hwmon RPM fallback only when needed.
+# Rationale: Userspace needs actual fan RPM when the native capability path is absent.
+@@ -256,6 +437,10 @@
+ 	bool visible = false;
+ 
+ 	if (type == hwmon_fan) {
++		if (channel == 0 && priv->fan0_input_fallback &&
++		    attr == hwmon_fan_input)
++			return 0444;
++
+ 		if (!(priv->fan_info[channel].supported & LWMI_SUPP_VALID))
+ 			return 0;
+ 
+# Change: Reject an unavailable fallback RPM value.
+# Rationale: A sentinel is not a valid RPM reading.
+@@ -329,6 +514,8 @@
+ 			err = lwmi_om_fan_get_set(priv, channel, &retval, false);
+ 			if (err)
+ 				return err;
++			if (channel == 0 && priv->fan0_input_fallback && retval == U32_MAX)
++				return -EIO;
+ 
+ 			*val = retval;
+ 			return 0;
+# Change: Reset and compute RPM fallback state with capability data.
+# Rationale: Probe and unbind must not retain stale hwmon visibility.
+@@ -459,6 +646,7 @@
+ 		dev_warn(&priv->wdev->dev, "fan RPM constraint relaxed. Use with caution\n");
+ 
+ 	valid = 0;
++	priv->fan0_input_fallback = false;
+ 	for (i = 0; i < LWMI_FAN_NR; i++) {
+ 		if (!(priv->fan_info[i].supported & LWMI_SUPP_VALID))
+ 			continue;
+# Change: Enable fallback RPM on supported handhelds only.
+# Rationale: The fallback must not alter non-handheld Lenovo devices.
+@@ -473,6 +661,13 @@
+ 			valid--;
+ 		}
+ 	}
++
++	priv->fan0_input_fallback = priv->handheld_supported &&
++		(priv->fan_info[0].supported & LWMI_FAN_RPM_NORMAL_SUPPORT) !=
++		LWMI_FAN_RPM_NORMAL_SUPPORT;
++	if (priv->fan0_input_fallback &&
++	    !(priv->fan_info[0].supported & LWMI_SUPP_VALID))
++		valid++;
+ 
+ 	if (valid == 0) {
+ 		dev_warn(&priv->wdev->dev,
+# Change: Clear RPM fallback state on capability reset.
+# Rationale: Later probing must recompute the visible interface.
+@@ -538,6 +733,7 @@
+ 
+ 	priv->fan_flags.capdata00_collected = false;
+ 	priv->fan_flags.capdata_fan_collected = false;
++	priv->fan0_input_fallback = false;
+ }
+ 
+ /**
+# Change: Add Full Speed, Fan Method curve, and their probe/remove paths.
+# Rationale: Full Speed, curve, and RPM use independent firmware routes and need bounded typed sysfs interfaces.
+@@ -588,8 +784,251 @@
+ out:
+ 	priv->fan_flags.capdata_fan_collected = true;
+ 	lwmi_om_hwmon_add(priv);
++}
++
++/* ======== Full Speed (supported Legion Go handhelds only) ======== */
++
++static int lwmi_om_fan_fullspeed_get(struct lwmi_om_priv *priv, bool *enabled)
++{
++	struct wmi_method_args_32 args = {
++		.arg0 = LWMI_ATTR_ID_FAN_FULLSPEED,
++	};
++	u32 value;
++	int ret;
++
++	ret = lwmi_dev_evaluate_int(priv->wdev, 0x0, LWMI_FEATURE_VALUE_GET,
++				    (u8 *)&args, sizeof(args), &value);
++	if (ret)
++		return ret;
++
++	return lenovo_fan_fullspeed_parse(value, enabled);
+ }
+ 
++static int lwmi_om_fan_fullspeed_set(struct lwmi_om_priv *priv, bool enabled)
++{
++	struct wmi_method_args_32 args = {
++		.arg0 = LWMI_ATTR_ID_FAN_FULLSPEED,
++		.arg1 = enabled,
++	};
++
++	return lwmi_dev_evaluate_int(priv->wdev, 0x0, LWMI_FEATURE_VALUE_SET,
++				     (u8 *)&args, sizeof(args), NULL);
++}
++
++static ssize_t fan_fullspeed_show(struct device *dev,
++				  struct device_attribute *attr, char *buf)
++{
++	struct lwmi_om_priv *priv = dev_get_drvdata(dev);
++	bool enabled;
++	int ret;
++
++	mutex_lock(&priv->fan_fullspeed_lock);
++	ret = priv->fan_fullspeed_removing ? -ENODEV :
++		lwmi_om_fan_fullspeed_get(priv, &enabled);
++	mutex_unlock(&priv->fan_fullspeed_lock);
++	if (ret)
++		return ret;
++
++	return sysfs_emit(buf, "%u\n", enabled);
++}
++
++static ssize_t fan_fullspeed_store(struct device *dev,
++				   struct device_attribute *attr, const char *buf,
++				   size_t count)
++{
++	struct lwmi_om_priv *priv = dev_get_drvdata(dev);
++	unsigned int value;
++	int ret;
++
++	ret = kstrtouint(buf, 10, &value);
++	if (ret)
++		return ret;
++	if (value > 1)
++		return -EINVAL;
++
++	mutex_lock(&priv->fan_fullspeed_lock);
++	ret = priv->fan_fullspeed_removing ? -ENODEV :
++		lwmi_om_fan_fullspeed_set(priv, value);
++	mutex_unlock(&priv->fan_fullspeed_lock);
++
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_RW(fan_fullspeed);
++
++static void lwmi_om_fan_fullspeed_add(struct lwmi_om_priv *priv)
++{
++	int ret;
++
++	if (!priv->handheld_supported)
++		return;
++
++	ret = device_create_file(&priv->wdev->dev, &dev_attr_fan_fullspeed);
++	if (!ret)
++		priv->fan_fullspeed_added = true;
++}
++
++static void lwmi_om_fan_fullspeed_remove(struct lwmi_om_priv *priv)
++{
++	if (!priv->fan_fullspeed_added)
++		return;
++
++	mutex_lock(&priv->fan_fullspeed_lock);
++	priv->fan_fullspeed_removing = true;
++	mutex_unlock(&priv->fan_fullspeed_lock);
++
++	device_remove_file(&priv->wdev->dev, &dev_attr_fan_fullspeed);
++	priv->fan_fullspeed_added = false;
++}
++
++/* ======== Fan Method (supported Legion Go handhelds only) ======== */
++
++static int lwmi_fan_get_curve(struct lwmi_fan_priv *priv,
++			      struct lenovo_fan_curve *curve)
++{
++	u8 input[] = { 1, 1 };
++	struct wmi_buffer in = {
++		.length = sizeof(input),
++		.data = input,
++	};
++	struct wmi_buffer out = {};
++	int ret;
++
++	ret = wmidev_invoke_method(priv->wdev, 0, LENOVO_FAN_METHOD_GET_CURVE,
++				   &in, &out, LENOVO_FAN_CURVE_REPLY_SIZE);
++	if (ret)
++		return ret;
++
++	ret = lenovo_fan_curve_parse_reply(out.data, out.length,
++					   priv->handheld->curve_max, curve);
++	kfree(out.data);
++
++	return ret;
++}
++
++static int lwmi_fan_set_curve(struct lwmi_fan_priv *priv,
++			      const struct lenovo_fan_curve *curve)
++{
++	u8 buffer[LENOVO_FAN_CURVE_WRITE_SIZE] = {};
++	struct wmi_buffer in = {
++		.length = sizeof(buffer),
++		.data = buffer,
++	};
++
++	lenovo_fan_curve_serialize(curve, buffer);
++
++	return wmidev_invoke_procedure(priv->wdev, 0, LENOVO_FAN_METHOD_SET_CURVE,
++					&in);
++}
++
++static ssize_t fan_curve_show(struct device *dev,
++			      struct device_attribute *attr, char *buf)
++{
++	struct lwmi_fan_priv *priv = dev_get_drvdata(dev);
++	struct lenovo_fan_curve curve;
++	ssize_t length = 0;
++	int ret;
++
++	mutex_lock(&priv->lock);
++	ret = priv->removing ? -ENODEV : lwmi_fan_get_curve(priv, &curve);
++	if (!ret)
++		length = sysfs_emit(buf, "%u %u %u %u %u %u %u %u %u %u\n",
++				    curve.speed[0], curve.speed[1], curve.speed[2],
++				    curve.speed[3], curve.speed[4], curve.speed[5],
++				    curve.speed[6], curve.speed[7], curve.speed[8],
++				    curve.speed[9]);
++	mutex_unlock(&priv->lock);
++
++	return ret ? ret : length;
++}
++
++static int lwmi_fan_parse_curve(const char *buf, struct lenovo_fan_curve *curve,
++				u16 max)
++{
++	unsigned int speed[LENOVO_FAN_CURVE_POINTS];
++	char extra;
++	int i;
++	int parsed;
++
++	parsed = sscanf(buf, "%u %u %u %u %u %u %u %u %u %u %c",
++			&speed[0], &speed[1], &speed[2], &speed[3], &speed[4],
++			&speed[5], &speed[6], &speed[7], &speed[8], &speed[9],
++			&extra);
++	if (parsed != LENOVO_FAN_CURVE_POINTS)
++		return -EINVAL;
++
++	for (i = 0; i < LENOVO_FAN_CURVE_POINTS; i++) {
++		if (speed[i] > max)
++			return -ERANGE;
++		curve->speed[i] = speed[i];
++	}
++
++	return lenovo_fan_curve_user_valid(curve, max) ? 0 : -ERANGE;
++}
++
++static ssize_t fan_curve_store(struct device *dev,
++			       struct device_attribute *attr, const char *buf,
++			       size_t count)
++{
++	struct lwmi_fan_priv *priv = dev_get_drvdata(dev);
++	struct lenovo_fan_curve curve;
++	int ret;
++
++	ret = lwmi_fan_parse_curve(buf, &curve, priv->handheld->curve_max);
++	if (ret)
++		return ret;
++
++	mutex_lock(&priv->lock);
++	ret = priv->removing ? -ENODEV : lwmi_fan_set_curve(priv, &curve);
++	mutex_unlock(&priv->lock);
++
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_RW(fan_curve);
++
++static struct attribute *lwmi_fan_attrs[] = {
++	&dev_attr_fan_curve.attr,
++	NULL,
++};
++
++static const struct attribute_group lwmi_fan_group = {
++	.attrs = lwmi_fan_attrs,
++};
++
++static int lwmi_fan_probe(struct wmi_device *wdev)
++{
++	const struct lenovo_handheld_dmi *handheld;
++	const char *vendor;
++	const char *product_name;
++	const char *product_version;
++	struct lwmi_fan_priv *priv;
++
++	vendor = dmi_get_system_info(DMI_SYS_VENDOR);
++	product_name = dmi_get_system_info(DMI_PRODUCT_NAME);
++	product_version = dmi_get_system_info(DMI_PRODUCT_VERSION);
++	handheld = lenovo_handheld_find(vendor, product_name, product_version);
++	if (!handheld)
++		return -ENODEV;
++
++	priv = devm_kzalloc(&wdev->dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++
++	priv->interface.type = LWMI_WMI_FAN_METHOD;
++	priv->wdev = wdev;
++	priv->handheld = handheld;
++	mutex_init(&priv->lock);
++	dev_set_drvdata(&wdev->dev, priv);
++
++	return devm_device_add_group(&wdev->dev, &lwmi_fan_group);
++}
++
++static void lwmi_fan_remove(struct lwmi_fan_priv *priv)
++{
++	mutex_lock(&priv->lock);
++	priv->removing = true;
++	mutex_unlock(&priv->lock);
++}
++
+ /* ======== Power Supply Extension (component: lenovo-wmi-capdata 00) ======== */
+ 
+ /**
+# Change: Correct the thermal-mode comment.
+# Rationale: The code uses the thermal-mode notifier, not a GameZone driver query.
+@@ -978,7 +1417,7 @@
+ /**
+  * tunable_attr_01_id() - Formats a tunable_attr_01 to a capdata attribute ID
+  * @attr: The tunable_attr_01 to format.
+- * @mode: The u8 corresponding to the wmi-gamezone mode for set/get.
++ * @mode: The u8 corresponding to the thermal mode for set/get.
+  *
+  * Return: encoded capability data attribute ID.
+  */
+# Change: Correct the custom-profile comment.
+# Rationale: The code uses the thermal-mode notifier, not a GameZone driver query.
+@@ -1203,9 +1642,9 @@
+  * @tunable_attr: The attribute to be stored.
+  *
+  * Sets the value of the given attribute when operating under the "custom"
+- * smartfan profile. The current smartfan profile is retrieved from the
+- * lenovo-wmi-gamezone driver and error is returned if the result is not
+- * "custom". This function is intended to be generic so it can be called from
++ * smartfan profile. The current profile is queried through the thermal-mode
++ * notifier and an error is returned if the result is not "custom". This
++ * function is intended to be generic so it can be called from
+  * any integer attribute's "_store" function. The integer to be sent to the WMI
+  * method is range checked and an error code is returned if out of range.
+  *
+# Change: Correct the profile-read comment.
+# Rationale: The code uses the thermal-mode notifier, not a GameZone driver query.
+@@ -1265,8 +1704,8 @@
+  * @tunable_attr: The attribute to be read.
+  *
+  * Retrieves the value of the given attribute for the current smartfan profile.
+- * The current smartfan profile is retrieved from the lenovo-wmi-gamezone driver.
+- * This function is intended to be generic so it can be called from any integer
++ * The current profile is queried through the thermal-mode notifier. This
++ * function is intended to be generic so it can be called from any integer
+  * attribute's "_show" function.
+  *
+  * If the WMI is success the sysfs attribute is notified.
+# Change: Dispatch Other Mode and Fan Method WMI devices by interface type.
+# Rationale: One driver must own both exact GUIDs while preserving their separate probe and remove paths.
+@@ -1683,10 +2122,14 @@
+ 	.unbind = lwmi_om_master_unbind,
+ };
+ 
+-static int lwmi_other_probe(struct wmi_device *wdev, const void *context)
++static int lwmi_om_probe(struct wmi_device *wdev)
+ {
+ 	struct component_match *master_match = NULL;
++	const char *vendor;
++	const char *product_name;
++	const char *product_version;
+ 	struct lwmi_om_priv *priv;
++	int ret;
+ 
+ 	priv = devm_kzalloc(&wdev->dev, sizeof(*priv), GFP_KERNEL);
+ 	if (!priv)
+# Change: Add handheld-gated Full Speed lifecycle and removal dispatch.
+# Rationale: Full Speed must be unavailable on unrelated devices and removed safely on errors or unbind.
+@@ -1694,25 +2137,80 @@
+ 
+ 	/* Sentinel for on-demand ida_free(). */
+ 	priv->ida_id = -EIDRM;
++
++	vendor = dmi_get_system_info(DMI_SYS_VENDOR);
++	product_name = dmi_get_system_info(DMI_PRODUCT_NAME);
++	product_version = dmi_get_system_info(DMI_PRODUCT_VERSION);
+ 
++	priv->interface.type = LWMI_WMI_OTHER;
+ 	priv->wdev = wdev;
++	mutex_init(&priv->fan_fullspeed_lock);
++	priv->handheld_supported = !!lenovo_handheld_find(vendor, product_name,
++								    product_version);
+ 	dev_set_drvdata(&wdev->dev, priv);
+ 
++	lwmi_om_fan_fullspeed_add(priv);
++
+ 	lwmi_cd_match_add_all(&wdev->dev, &master_match);
+-	if (IS_ERR(master_match))
++	if (IS_ERR(master_match)) {
++		lwmi_om_fan_fullspeed_remove(priv);
+ 		return PTR_ERR(master_match);
++	}
+ 
+-	return component_master_add_with_match(&wdev->dev, &lwmi_om_master_ops,
+-					       master_match);
++	ret = component_master_add_with_match(&wdev->dev, &lwmi_om_master_ops,
++					      master_match);
++	if (ret)
++		lwmi_om_fan_fullspeed_remove(priv);
++
++	return ret;
+ }
+ 
++static void lwmi_om_remove(struct lwmi_om_priv *priv)
++{
++	lwmi_om_fan_fullspeed_remove(priv);
++	component_master_del(&priv->wdev->dev, &lwmi_om_master_ops);
++}
++
++static const enum lwmi_wmi_interface_type lwmi_om_interface = LWMI_WMI_OTHER;
++static const enum lwmi_wmi_interface_type lwmi_fan_interface = LWMI_WMI_FAN_METHOD;
++
++static int lwmi_other_probe(struct wmi_device *wdev, const void *context)
++{
++	const enum lwmi_wmi_interface_type *interface = context;
++
++	if (!interface)
++		return -ENODEV;
++
++	switch (*interface) {
++	case LWMI_WMI_OTHER:
++		return lwmi_om_probe(wdev);
++	case LWMI_WMI_FAN_METHOD:
++		return lwmi_fan_probe(wdev);
++	}
++
++	return -ENODEV;
++}
++
+ static void lwmi_other_remove(struct wmi_device *wdev)
+ {
+-	component_master_del(&wdev->dev, &lwmi_om_master_ops);
++	struct lwmi_wmi_priv *priv = dev_get_drvdata(&wdev->dev);
++
++	if (!priv)
++		return;
++
++	switch (priv->type) {
++	case LWMI_WMI_OTHER:
++		lwmi_om_remove(container_of(priv, struct lwmi_om_priv, interface));
++		break;
++	case LWMI_WMI_FAN_METHOD:
++		lwmi_fan_remove(container_of(priv, struct lwmi_fan_priv, interface));
++		break;
++	}
+ }
+ 
+ static const struct wmi_device_id lwmi_other_id_table[] = {
+-	{ LENOVO_OTHER_MODE_GUID, NULL },
++	{ LENOVO_OTHER_MODE_GUID, &lwmi_om_interface },
++	{ LENOVO_FAN_METHOD_GUID, &lwmi_fan_interface },
+ 	{}
+ };
+ 
+# Change: Register both WMI GUIDs and update module attribution and description.
+# Rationale: The module now owns both Other Mode and Fan Method interfaces.
+@@ -1734,5 +2232,6 @@
+ MODULE_DEVICE_TABLE(wmi, lwmi_other_id_table);
+ MODULE_AUTHOR("Derek J. Clark <derekjohn.clark@gmail.com>");
+ MODULE_AUTHOR("Rong Zhang <i@rong.moe>");
+-MODULE_DESCRIPTION("Lenovo Other Mode WMI Driver");
++MODULE_AUTHOR("GoldenRegulus");
++MODULE_DESCRIPTION("Lenovo Other Mode and Fan Method WMI Driver");
+ MODULE_LICENSE("GPL");

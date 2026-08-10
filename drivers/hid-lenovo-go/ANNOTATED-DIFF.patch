@@ -1,0 +1,794 @@
+# Annotated unified diff for drivers/hid-lenovo-go/hid-lenovo-go.c.
+# Base: the selected OGC5 hid-lenovo-go.c source.
+# Scope: project changes only; unchanged upstream source is not included separately.
+# This is an annotated review artifact, not an applyable patch.
+# The comments between hunks explain the project change and its rationale.
+
+--- a/drivers/hid/hid-lenovo-go.c
++++ b/drivers/hid/hid-lenovo-go.c
+# Change: Add project attribution.
+# Rationale: The upstream file already has copyright and module-author notices.
+@@ -4,6 +4,7 @@
+  *
+  *  Copyright (c) 2026 Derek J. Clark <derekjohn.clark@gmail.com>
+  *  Copyright (c) 2026 Valve Corporation
++ *  Copyright (c) 2026 GoldenRegulus
+  */
+ 
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+# Change: Add spinlock support.
+# Rationale: Reply-state updates run in the raw HID event path.
+@@ -21,6 +22,7 @@
+ #include <linux/led-class-multicolor.h>
+ #include <linux/mutex.h>
+ #include <linux/printk.h>
++#include <linux/spinlock.h>
+ #include <linux/sysfs.h>
+ #include <linux/types.h>
+ #include <linux/unaligned.h>
+# Change: Define reply-correlation and calibration-result state.
+# Rationale: A synchronous reply must match its request, and calibration completion needs result and error storage.
+@@ -31,23 +33,53 @@
+ #include "hid-ids.h"
+ 
+ #define GO_GP_INTF_IN		0x83
++#define GO_INPUT_REPORT_ID	0x04
+ #define GO_OUTPUT_REPORT_ID	0x05
+ #define GO_GP_RESET_SUCCESS	0x01
+ #define GO_PACKET_SIZE		64
+ 
++/*
++ * Lenovo identifies a synchronous reply by command and sub-command. The
++ * firmware has no sequence token, so an identical late reply is ambiguous.
++ */
++struct hid_go_cmd {
++	struct completion done;
++	spinlock_t lock; /* protects fields below */
++	bool pending;
++	u8 command;
++	u8 sub_command;
++	int result;
++};
++
++struct hid_go_calibration_result {
++	u8 device;
++	u8 module;
++	u8 status;
++	u16 error;
++};
++
++struct hid_go_calibration_ref {
++	u8 *status;
++	u16 *error;
++};
++
++static struct hid_go_cmd go_cmd;
++
+ static struct hid_go_cfg {
+ 	struct delayed_work go_cfg_setup;
+-	struct completion send_cmd_complete;
+ 	struct led_classdev *led_cdev;
+ 	struct hid_device *hdev;
+ 	struct mutex cfg_mutex; /*ensure single synchronous output report*/
+ 	u8 fps_mode;
+ 	u8 gp_left_auto_sleep_time;
+ 	u8 gp_left_gyro_cal_status;
++	u16 gp_left_gyro_cal_error;
+ 	u8 gp_left_joy_cal_status;
++	u16 gp_left_joy_cal_error;
+ 	u8 gp_left_notify_en;
+ 	u8 gp_left_rumble_mode;
+ 	u8 gp_left_trigg_cal_status;
++	u16 gp_left_trigg_cal_error;
+ 	u32 gp_left_version_firmware;
+ 	u8 gp_left_version_gen;
+ 	u32 gp_left_version_hardware;
+# Change: Add right-controller calibration error fields.
+# Rationale: Each supported calibration control needs its own firmware-error readback.
+@@ -56,10 +88,13 @@
+ 	u8 gp_mode;
+ 	u8 gp_right_auto_sleep_time;
+ 	u8 gp_right_gyro_cal_status;
++	u16 gp_right_gyro_cal_error;
+ 	u8 gp_right_joy_cal_status;
++	u16 gp_right_joy_cal_error;
+ 	u8 gp_right_notify_en;
+ 	u8 gp_right_rumble_mode;
+ 	u8 gp_right_trigg_cal_status;
++	u16 gp_right_trigg_cal_error;
+ 	u32 gp_right_version_firmware;
+ 	u8 gp_right_version_gen;
+ 	u32 gp_right_version_hardware;
+# Change: Decode calibration completions and implement bounded output transport.
+# Rationale: Firmware completion is asynchronous; transport must validate report framing and short writes.
+@@ -330,6 +365,106 @@
+ 	[WINDOWS] = "windows",
+ 	[LINUX] = "linux",
+ };
++
++static int hid_go_decode_calibration_completion(const struct command_report *cmd_rep,
++						struct hid_go_calibration_result *result)
++{
++	if (cmd_rep->report_id != GO_INPUT_REPORT_ID ||
++	    cmd_rep->id != MCU_CONFIG_DATA || cmd_rep->cmd != GET_DEVICE_STATUS ||
++	    cmd_rep->sub_cmd != GET_CAL_STATUS)
++		return -EINVAL;
++	if (cmd_rep->device_type != LEFT_CONTROLLER &&
++	    cmd_rep->device_type != RIGHT_CONTROLLER)
++		return -EINVAL;
++	if (cmd_rep->data[0] < CALDEV_GYROSCOPE ||
++	    cmd_rep->data[0] > CALDEV_TRIGGER)
++		return -EINVAL;
++	if (cmd_rep->data[1] > 1)
++		return -EINVAL;
++
++	result->device = cmd_rep->device_type;
++	result->module = cmd_rep->data[0];
++	result->status = cmd_rep->data[1] ? CAL_STAT_SUCCESS : CAL_STAT_FAILURE;
++	result->error = get_unaligned_le16(cmd_rep->data + 2);
++	return 0;
++}
++
++static void hid_go_cmd_arm(u8 command, u8 sub_command)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&go_cmd.lock, flags);
++	reinit_completion(&go_cmd.done);
++	go_cmd.pending = true;
++	go_cmd.command = command;
++	go_cmd.sub_command = sub_command;
++	go_cmd.result = 0;
++	spin_unlock_irqrestore(&go_cmd.lock, flags);
++}
++
++static void hid_go_cmd_consume(u8 command, u8 sub_command, int result)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&go_cmd.lock, flags);
++	if (go_cmd.pending && command == go_cmd.command &&
++	    sub_command == go_cmd.sub_command) {
++		go_cmd.pending = false;
++		go_cmd.result = result;
++		complete(&go_cmd.done);
++	}
++	spin_unlock_irqrestore(&go_cmd.lock, flags);
++}
++
++static int hid_go_cmd_finish(long wait_result)
++{
++	unsigned long flags;
++	int ret;
++
++	spin_lock_irqsave(&go_cmd.lock, flags);
++	if (go_cmd.pending) {
++		go_cmd.pending = false;
++		ret = wait_result < 0 ? wait_result : -ETIMEDOUT;
++	} else {
++		ret = go_cmd.result;
++	}
++	spin_unlock_irqrestore(&go_cmd.lock, flags);
++	return ret;
++}
++
++static int hid_go_build_output_report(u8 *packet, u8 id, u8 command, u8 index,
++				      enum dev_type device, const u8 *data,
++				      size_t len)
++{
++	size_t data_offset = 5;
++
++	if (id == MCU_CONFIG_DATA && command == SET_DPI_CFG &&
++	    index == FPS_MODE_DPI)
++		data_offset = 4;
++	if (len > GO_PACKET_SIZE - data_offset || (len && !data))
++		return -EINVAL;
++
++	memset(packet, 0, GO_PACKET_SIZE);
++	packet[0] = GO_OUTPUT_REPORT_ID;
++	packet[1] = id;
++	packet[2] = command;
++	packet[3] = index;
++	if (data_offset == 5)
++		packet[4] = device;
++	if (len)
++		memcpy(packet + data_offset, data, len);
++	return 0;
++}
++
++static int hid_go_send_output_report(struct hid_device *hdev, u8 *packet)
++{
++	int ret;
++
++	ret = hid_hw_output_report(hdev, packet, GO_PACKET_SIZE);
++	if (ret != GO_PACKET_SIZE)
++		return ret < 0 ? ret : -EIO;
++	return 0;
++}
+ 
+ static int hid_go_version_event(struct command_report *cmd_rep)
+ {
+# Change: Map each calibration device and module to result storage.
+# Rationale: One helper prevents mismatched status and error attributes.
+@@ -575,35 +710,42 @@
+ 	}
+ }
+ 
+-static int hid_go_device_status_event(struct command_report *cmd_rep)
++static int hid_go_calibration_result_ref(u8 device, u8 module,
++					 struct hid_go_calibration_ref *ref)
+ {
+-	switch (cmd_rep->device_type) {
++	switch (device) {
+ 	case LEFT_CONTROLLER:
+-		switch (cmd_rep->data[0]) {
++		switch (module) {
+ 		case CALDEV_GYROSCOPE:
+-			drvdata.gp_left_gyro_cal_status = cmd_rep->data[1];
+-			return 0;
+-		case CALDEV_JOYSTICK:
+-			drvdata.gp_left_joy_cal_status = cmd_rep->data[1];
+-			return 0;
++			ref->status = &drvdata.gp_left_gyro_cal_status;
++			ref->error = &drvdata.gp_left_gyro_cal_error;
++			break;
++		case CALDEV_JOYSTICK:
++			ref->status = &drvdata.gp_left_joy_cal_status;
++			ref->error = &drvdata.gp_left_joy_cal_error;
++			break;
+ 		case CALDEV_TRIGGER:
+-			drvdata.gp_left_trigg_cal_status = cmd_rep->data[1];
+-			return 0;
++			ref->status = &drvdata.gp_left_trigg_cal_status;
++			ref->error = &drvdata.gp_left_trigg_cal_error;
++			break;
+ 		default:
+ 			return -EINVAL;
+ 		}
+ 		break;
+ 	case RIGHT_CONTROLLER:
+-		switch (cmd_rep->data[0]) {
++		switch (module) {
+ 		case CALDEV_GYROSCOPE:
+-			drvdata.gp_right_gyro_cal_status = cmd_rep->data[1];
+-			return 0;
++			ref->status = &drvdata.gp_right_gyro_cal_status;
++			ref->error = &drvdata.gp_right_gyro_cal_error;
++			break;
+ 		case CALDEV_JOYSTICK:
+-			drvdata.gp_right_joy_cal_status = cmd_rep->data[1];
+-			return 0;
++			ref->status = &drvdata.gp_right_joy_cal_status;
++			ref->error = &drvdata.gp_right_joy_cal_error;
++			break;
+ 		case CALDEV_TRIGGER:
+-			drvdata.gp_right_trigg_cal_status = cmd_rep->data[1];
+-			return 0;
++			ref->status = &drvdata.gp_right_trigg_cal_status;
++			ref->error = &drvdata.gp_right_trigg_cal_error;
++			break;
+ 		default:
+ 			return -EINVAL;
+ 		}
+# Change: Publish decoded calibration completion state.
+# Rationale: Userspace reads firmware result rather than assuming a submitted request succeeded.
+@@ -611,8 +753,24 @@
+ 	default:
+ 		return -EINVAL;
+ 	}
++	return 0;
+ }
+ 
++static int hid_go_device_status_event(struct command_report *cmd_rep)
++{
++	struct hid_go_calibration_result result;
++	struct hid_go_calibration_ref ref;
++	int ret;
++
++	ret = hid_go_decode_calibration_completion(cmd_rep, &result);
++	if (ret)
++		return ret;
++	hid_go_calibration_result_ref(result.device, result.module, &ref);
++	WRITE_ONCE(*ref.error, result.error);
++	WRITE_ONCE(*ref.status, result.status);
++	return 0;
++}
++
+ static int hid_go_os_mode_cfg_event(struct command_report *cmd_rep)
+ {
+ 	switch (cmd_rep->sub_cmd) {
+# Change: Filter reports to the active configuration interface.
+# Rationale: Unrelated input reports must not complete a configuration request.
+@@ -656,6 +814,10 @@
+ 
+ 	if (size != GO_PACKET_SIZE)
+ 		goto passthrough;
++	if (data[0] != GO_INPUT_REPORT_ID)
++		goto passthrough;
++	if (hdev != READ_ONCE(drvdata.hdev))
++		goto passthrough;
+ 
+ 	ep = get_endpoint_address(hdev);
+ 	if (ep != GO_GP_INTF_IN)
+# Change: Complete only the matching synchronous request.
+# Rationale: A generic completion could accept an unrelated reply.
+@@ -707,7 +869,7 @@
+ 	dev_dbg(&hdev->dev, "Rx data as raw input report: [%*ph]\n",
+ 		GO_PACKET_SIZE, data);
+ 
+-	complete(&drvdata.send_cmd_complete);
++	hid_go_cmd_consume(cmd_rep->cmd, cmd_rep->sub_cmd, ret);
+ 	return ret;
+ 
+ passthrough:
+# Change: Arm, send, and finish synchronous commands by command and sub-command; submit calibration without waiting.
+# Rationale: The firmware has no sequence token, and calibration completion is not a synchronous transport acknowledgement.
+@@ -720,42 +882,37 @@
+ 			    u8 index, enum dev_type device, u8 *data, size_t len)
+ {
+ 	unsigned char *dmabuf __free(kfree) = NULL;
+-	u8 header[] = { GO_OUTPUT_REPORT_ID, id, command, index, device };
+-	size_t header_size = ARRAY_SIZE(header);
+ 	int timeout = 50;
++	long wait_result;
+ 	int ret;
+ 
+-	if (header_size + len > GO_PACKET_SIZE)
+-		return -EINVAL;
+-
+ 	guard(mutex)(&drvdata.cfg_mutex);
++	if (!hdev || hdev != READ_ONCE(drvdata.hdev))
++		return -ENODEV;
+ 	/* We can't use a devm_alloc reusable buffer without side effects during suspend */
+-	dmabuf = kzalloc(GO_PACKET_SIZE, GFP_KERNEL);
++	dmabuf = kmalloc(GO_PACKET_SIZE, GFP_KERNEL);
+ 	if (!dmabuf)
+ 		return -ENOMEM;
++	ret = hid_go_build_output_report(dmabuf, id, command, index, device,
++					 data, len);
++	if (ret)
++		return ret;
+ 
+-	memcpy(dmabuf, header, header_size);
+-	memcpy(dmabuf + header_size, data, len);
+-
+ 	dev_dbg(&hdev->dev, "Send data as raw output report: [%*ph]\n",
+ 		GO_PACKET_SIZE, dmabuf);
+ 
+-	ret = hid_hw_output_report(hdev, dmabuf, GO_PACKET_SIZE);
+-	if (ret < 0)
+-		return ret;
+-
+-	ret = ret == GO_PACKET_SIZE ? 0 : -EINVAL;
+-	if (ret)
+-		return ret;
++	if (id == MCU_CONFIG_DATA &&
++	    (command == SET_TRIGGER_CFG || command == SET_JOYSTICK_CFG ||
++	     command == SET_GYRO_CFG))
++		return hid_go_send_output_report(hdev, dmabuf);
+ 
+-	ret = wait_for_completion_interruptible_timeout(&drvdata.send_cmd_complete,
+-							msecs_to_jiffies(timeout));
+-
+-	if (ret == 0) /* timeout occurred */
+-		ret = -EBUSY;
+-
+-	reinit_completion(&drvdata.send_cmd_complete);
+-	return 0;
++	hid_go_cmd_arm(command, index);
++	ret = hid_go_send_output_report(hdev, dmabuf);
++	if (ret)
++		return hid_go_cmd_finish(ret);
++	wait_result = wait_for_completion_interruptible_timeout(&go_cmd.done,
++								msecs_to_jiffies(timeout));
++	return hid_go_cmd_finish(wait_result);
+ }
+ 
+ static ssize_t version_show(struct device *dev, struct device_attribute *attr,
+# Change: Reject the unsupported zero value for Boolean feature writes.
+# Rationale: These firmware controls have a defined nonzero accepted set.
+@@ -902,6 +1059,8 @@
+ 	case FEATURE_LIGHT_ENABLE:
+ 	case FEATURE_TOUCHPAD_ENABLE:
+ 		ret = sysfs_match_string(enabled_status_text, buf);
++		if (!ret)
++			return -EINVAL;
+ 		val = ret;
+ 		break;
+ 	case FEATURE_AUTO_SLEEP_TIME:
+# Change: Reject the unsupported zero gamepad mode.
+# Rationale: Mode zero must not become an empty firmware request.
+@@ -918,6 +1077,8 @@
+ 		break;
+ 	case FEATURE_GAMEPAD_MODE:
+ 		ret = sysfs_match_string(gamepad_mode_text, buf);
++		if (!ret)
++			return -EINVAL;
+ 		val = ret;
+ 		break;
+ 	default:
+# Change: Reject the unsupported zero rumble mode.
+# Rationale: The driver must send only defined values.
+@@ -1112,9 +1273,8 @@
+ 
+ 	if (ret < 0)
+ 		return ret;
+-
+-	if (!val)
+-		size = 0;
++	if (!ret)
++		return -EINVAL;
+ 
+ 	ret = mcu_property_out(drvdata.hdev, MCU_CONFIG_DATA, SET_MOTOR_CFG,
+ 			       index, device_type, &val, size);
+# Change: Read calibration status through the common result helper.
+# Rationale: Status and error must address the same device and control.
+@@ -1289,53 +1449,20 @@
+ 				  enum dev_type device_type,
+ 				  enum cal_device_type cal_type)
+ {
+-	u8 i;
++	struct hid_go_calibration_ref ref;
++	u8 status;
++	int ret;
+ 
+-	switch (index) {
+-	case GET_CAL_STATUS:
+-		switch (device_type) {
+-		case LEFT_CONTROLLER:
+-			switch (cal_type) {
+-			case CALDEV_GYROSCOPE:
+-				i = drvdata.gp_left_gyro_cal_status;
+-				break;
+-			case CALDEV_JOYSTICK:
+-				i = drvdata.gp_left_joy_cal_status;
+-				break;
+-			case CALDEV_TRIGGER:
+-				i = drvdata.gp_left_trigg_cal_status;
+-				break;
+-			default:
+-				return -EINVAL;
+-			}
+-			break;
+-		case RIGHT_CONTROLLER:
+-			switch (cal_type) {
+-			case CALDEV_GYROSCOPE:
+-				i = drvdata.gp_right_gyro_cal_status;
+-				break;
+-			case CALDEV_JOYSTICK:
+-				i = drvdata.gp_right_joy_cal_status;
+-				break;
+-			case CALDEV_TRIGGER:
+-				i = drvdata.gp_right_trigg_cal_status;
+-				break;
+-			default:
+-				return -EINVAL;
+-			}
+-			break;
+-		default:
+-			return -EINVAL;
+-		}
+-		break;
+-	default:
++	if (index != GET_CAL_STATUS)
+ 		return -EINVAL;
+-	}
+-
+-	if (i >= ARRAY_SIZE(cal_status_text))
++	ret = hid_go_calibration_result_ref(device_type, cal_type, &ref);
++	if (ret)
++		return ret;
++	status = READ_ONCE(*ref.status);
++	if (status >= ARRAY_SIZE(cal_status_text))
+ 		return -EINVAL;
+ 
+-	return sysfs_emit(buf, "%s\n", cal_status_text[i]);
++	return sysfs_emit(buf, "%s\n", cal_status_text[status]);
+ }
+ 
+ static ssize_t calibrate_config_store(struct device *dev,
+# Change: Clear stale state before Start and add error readback.
+# Rationale: A new operation must not display a prior completion as its own result.
+@@ -1343,24 +1470,58 @@
+ 				      const char *buf, u8 cmd, u8 sub_cmd,
+ 				      size_t count, enum dev_type device_type)
+ {
++	struct hid_go_calibration_ref ref;
+ 	size_t size = 1;
+ 	u8 val = 0;
++	u8 module;
+ 	int ret;
+ 
+ 	ret = sysfs_match_string(cal_enabled_text, buf);
+ 	if (ret < 0)
+ 		return ret;
++	if (!ret)
++		return -EINVAL;
+ 
+ 	val = ret;
+-	if (!val)
+-		size = 0;
+-
++	switch (cmd) {
++	case SET_TRIGGER_CFG:
++		module = CALDEV_TRIGGER;
++		break;
++	case SET_JOYSTICK_CFG:
++		module = CALDEV_JOYSTICK;
++		break;
++	case SET_GYRO_CFG:
++		module = CALDEV_GYROSCOPE;
++		break;
++	default:
++		return -EINVAL;
++	}
++	if (val == CAL_START) {
++		ret = hid_go_calibration_result_ref(device_type, module, &ref);
++		if (ret)
++			return ret;
++		WRITE_ONCE(*ref.error, 0);
++		WRITE_ONCE(*ref.status, CAL_STAT_UNKNOWN);
++	}
+ 	ret = mcu_property_out(drvdata.hdev, MCU_CONFIG_DATA, cmd, sub_cmd,
+ 			       device_type, &val, size);
+ 	if (ret < 0)
+ 		return ret;
+-
+ 	return count;
++}
++
++static ssize_t calibration_error_show(struct device *dev,
++				      struct device_attribute *attr, char *buf,
++				      enum dev_type device_type,
++				      enum cal_device_type cal_type)
++{
++	struct hid_go_calibration_ref ref;
++	int ret;
++
++	ret = hid_go_calibration_result_ref(device_type, cal_type, &ref);
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "0x%04x\n", READ_ONCE(*ref.error));
+ }
+ 
+ static ssize_t calibrate_config_options(struct device *dev,
+# Change: Reject the unsupported zero OS mode.
+# Rationale: The interface accepts only named modes.
+@@ -1387,7 +1548,7 @@
+ 
+ 	ret = sysfs_match_string(os_mode_text, buf);
+ 	if (ret <= 0)
+-		return ret;
++		return ret ? ret : -EINVAL;
+ 
+ 	val = ret;
+ 	ret = mcu_property_out(drvdata.hdev, OS_MODE_DATA, FEATURE_OS_MODE,
+# Change: Reject the unsupported zero RGB mode.
+# Rationale: The interface accepts only named modes.
+@@ -1585,7 +1746,7 @@
+ 
+ 	ret = sysfs_match_string(rgb_mode_text, buf);
+ 	if (ret <= 0)
+-		return ret;
++		return ret ? ret : -EINVAL;
+ 
+ 	val = ret;
+ 
+# Change: Pass calibration command and action in firmware order.
+# Rationale: The prior argument order caused valid calibration requests to be rejected before USB submission.
+@@ -1750,8 +1911,8 @@
+ 				     struct device_attribute *attr,           \
+ 				     const char *buf, size_t count)           \
+ 	{                                                                     \
+-		return calibrate_config_store(dev, attr, buf, _name.index,    \
+-					      _scmd, count, _dtype);          \
++		return calibrate_config_store(dev, attr, buf, _scmd,         \
++					      _name.index, count, _dtype);     \
+ 	}                                                                     \
+ 	static ssize_t _name##_##_rtype##_show(                               \
+ 		struct device *dev, struct device_attribute *attr, char *buf) \
+# Change: Define read-only calibration-error attributes.
+# Rationale: The backend needs the firmware error for each completed control.
+@@ -1769,6 +1930,14 @@
+ 	}                                                                     \
+ 	static DEVICE_ATTR_RO_NAMED(_name, _attrname)
+ 
++#define LEGO_CAL_ERROR_ATTR(_name, _attrname, _dtype, _ctype)                 \
++	static ssize_t _name##_show(struct device *dev,                       \
++				    struct device_attribute *attr, char *buf) \
++	{                                                                     \
++		return calibration_error_show(dev, attr, buf, _dtype, _ctype); \
++	}                                                                     \
++	static DEVICE_ATTR_RO_NAMED(_name, _attrname)
++
+ /* Gamepad - MCU */
+ static struct go_cfg_attr version_product_mcu = { PRODUCT_VERSION };
+ LEGO_DEVICE_ATTR_RO(version_product_mcu, "product_version", USB_MCU, version);
+# Change: Add left-controller error attributes.
+# Rationale: Expose the decoded error state for left joystick, trigger, and gyro calibration.
+@@ -1938,6 +2107,13 @@
+ LEGO_DEVICE_STATUS_ATTR(cal_gyro_left_status, "calibrate_gyro_status",
+ 			LEFT_CONTROLLER, CALDEV_GYROSCOPE);
+ 
++LEGO_CAL_ERROR_ATTR(cal_trigg_left_error, "calibrate_trigger_error",
++		    LEFT_CONTROLLER, CALDEV_TRIGGER);
++LEGO_CAL_ERROR_ATTR(cal_joy_left_error, "calibrate_joystick_error",
++		    LEFT_CONTROLLER, CALDEV_JOYSTICK);
++LEGO_CAL_ERROR_ATTR(cal_gyro_left_error, "calibrate_gyro_error",
++		    LEFT_CONTROLLER, CALDEV_GYROSCOPE);
++
+ static struct attribute *left_gamepad_attrs[] = {
+ 	&dev_attr_auto_sleep_time_left.attr,
+ 	&dev_attr_auto_sleep_time_left_range.attr,
+# Change: Publish left-controller error attributes in sysfs.
+# Rationale: Defined attributes must be part of the device group.
+@@ -1950,6 +2126,9 @@
+ 	&dev_attr_cal_trigg_left.attr,
+ 	&dev_attr_cal_trigg_left_index.attr,
+ 	&dev_attr_cal_trigg_left_status.attr,
++	&dev_attr_cal_gyro_left_error.attr,
++	&dev_attr_cal_joy_left_error.attr,
++	&dev_attr_cal_trigg_left_error.attr,
+ 	&dev_attr_imu_bypass_left.attr,
+ 	&dev_attr_imu_bypass_left_index.attr,
+ 	&dev_attr_imu_enabled_left.attr,
+# Change: Correct right-controller IMU-enable and reset selectors.
+# Rationale: Each sysfs attribute must address the intended controller firmware control.
+@@ -1999,13 +2178,13 @@
+ 		    index, feature_status);
+ static DEVICE_ATTR_RO_NAMED(imu_bypass_right_index, "imu_bypass_enabled_index");
+ 
+-static struct go_cfg_attr imu_enabled_right = { FEATURE_IMU_BYPASS };
++static struct go_cfg_attr imu_enabled_right = { FEATURE_IMU_ENABLE };
+ LEGO_DEVICE_ATTR_RW(imu_enabled_right, "imu_enabled", RIGHT_CONTROLLER, index,
+ 		    feature_status);
+ static DEVICE_ATTR_RO_NAMED(imu_enabled_right_index, "imu_enabled_index");
+ 
+ static struct go_cfg_attr reset_right = { FEATURE_RESET_GAMEPAD };
+-LEGO_DEVICE_ATTR_WO(reset_right, "reset", LEFT_CONTROLLER, feature_status);
++LEGO_DEVICE_ATTR_WO(reset_right, "reset", RIGHT_CONTROLLER, feature_status);
+ 
+ static struct go_cfg_attr rumble_mode_right = { RUMBLE_MODE };
+ LEGO_DEVICE_ATTR_RW(rumble_mode_right, "rumble_mode", RIGHT_CONTROLLER, index,
+# Change: Add right-controller error attributes.
+# Rationale: Expose the decoded error state for right joystick, trigger, and gyro calibration.
+@@ -2045,6 +2224,15 @@
+ LEGO_DEVICE_STATUS_ATTR(cal_gyro_right_status, "calibrate_gyro_status",
+ 			RIGHT_CONTROLLER, CALDEV_GYROSCOPE);
+ 
++LEGO_CAL_ERROR_ATTR(cal_trigg_right_error, "calibrate_trigger_error",
++		    RIGHT_CONTROLLER, CALDEV_TRIGGER);
++
++LEGO_CAL_ERROR_ATTR(cal_joy_right_error, "calibrate_joystick_error",
++		    RIGHT_CONTROLLER, CALDEV_JOYSTICK);
++
++LEGO_CAL_ERROR_ATTR(cal_gyro_right_error, "calibrate_gyro_error",
++		    RIGHT_CONTROLLER, CALDEV_GYROSCOPE);
++
+ static struct attribute *right_gamepad_attrs[] = {
+ 	&dev_attr_auto_sleep_time_right.attr,
+ 	&dev_attr_auto_sleep_time_right_range.attr,
+# Change: Publish right-controller error attributes in sysfs.
+# Rationale: Defined attributes must be part of the device group.
+@@ -2057,6 +2245,9 @@
+ 	&dev_attr_cal_trigg_right.attr,
+ 	&dev_attr_cal_trigg_right_index.attr,
+ 	&dev_attr_cal_trigg_right_status.attr,
++	&dev_attr_cal_gyro_right_error.attr,
++	&dev_attr_cal_joy_right_error.attr,
++	&dev_attr_cal_trigg_right_error.attr,
+ 	&dev_attr_imu_bypass_right.attr,
+ 	&dev_attr_imu_bypass_right_index.attr,
+ 	&dev_attr_imu_enabled_right.attr,
+# Change: Make probe publication and cleanup explicit.
+# Rationale: Failed probe and later removal must not leave sysfs groups, LED state, or a stale HID pointer.
+@@ -2363,33 +2554,34 @@
+ 		return -ENOMEM;
+ 
+ 	hid_set_drvdata(hdev, &drvdata);
+-	drvdata.hdev = hdev;
+ 	mutex_init(&drvdata.cfg_mutex);
++	init_completion(&go_cmd.done);
++	spin_lock_init(&go_cmd.lock);
++	go_cmd.pending = false;
++	drvdata.led_cdev = &go_cdev_rgb.led_cdev;
++	WRITE_ONCE(drvdata.hdev, hdev);
+ 
+ 	ret = sysfs_create_groups(&hdev->dev.kobj, top_level_attr_groups);
+ 	if (ret) {
+ 		dev_err_probe(&hdev->dev, ret,
+ 			      "Failed to create gamepad configuration attributes\n");
+-		return ret;
++		goto clear_state;
+ 	}
+ 
+ 	ret = devm_led_classdev_multicolor_register(&hdev->dev, &go_cdev_rgb);
+ 	if (ret) {
+ 		dev_err_probe(&hdev->dev, ret, "Failed to create RGB device\n");
+-		return ret;
++		goto remove_groups;
+ 	}
+ 
+-	ret = devm_device_add_group(go_cdev_rgb.led_cdev.dev, &rgb_attr_group);
++	ret = sysfs_create_group(&go_cdev_rgb.led_cdev.dev->kobj,
++				 &rgb_attr_group);
+ 	if (ret) {
+ 		dev_err_probe(&hdev->dev, ret,
+ 			      "Failed to create RGB configuration attributes\n");
+-		return ret;
++		goto unregister_led;
+ 	}
+ 
+-	drvdata.led_cdev = &go_cdev_rgb.led_cdev;
+-
+-	init_completion(&drvdata.send_cmd_complete);
+-
+ 	/* Executing calls prior to returning from probe will lock the MCU. Schedule
+ 	 * initial data call after probe has completed and MCU can accept calls.
+ 	 */
+# Change: Unwind delayed-work setup failure.
+# Rationale: A partially initialized driver must release every published resource.
+@@ -2398,9 +2590,21 @@
+ 	if (!ret) {
+ 		dev_err(&hdev->dev,
+ 			"Failed to schedule startup delayed work\n");
+-		return -ENODEV;
++		ret = -ENODEV;
++		goto remove_rgb_group;
+ 	}
+ 	return 0;
++
++remove_rgb_group:
++	sysfs_remove_group(&go_cdev_rgb.led_cdev.dev->kobj, &rgb_attr_group);
++unregister_led:
++	devm_led_classdev_multicolor_unregister(&hdev->dev, &go_cdev_rgb);
++remove_groups:
++	sysfs_remove_groups(&hdev->dev.kobj, top_level_attr_groups);
++clear_state:
++	WRITE_ONCE(drvdata.hdev, NULL);
++	hid_set_drvdata(hdev, NULL);
++	return ret;
+ }
+ 
+ static void hid_go_cfg_remove(struct hid_device *hdev)
+# Change: Remove LED and sysfs state before stopping HID.
+# Rationale: Linux must not retain attributes or LED ownership after driver removal.
+@@ -2413,9 +2617,12 @@
+ 	 * a stale drvdata.hdev pointer.
+ 	 */
+ 	cancel_delayed_work_sync(&drvdata.go_cfg_setup);
++	sysfs_remove_groups(&hdev->dev.kobj, top_level_attr_groups);
++	sysfs_remove_group(&go_cdev_rgb.led_cdev.dev->kobj, &rgb_attr_group);
++	devm_led_classdev_multicolor_unregister(&hdev->dev, &go_cdev_rgb);
+ 
+ 	guard(mutex)(&drvdata.cfg_mutex);
+-	sysfs_remove_groups(&hdev->dev.kobj, top_level_attr_groups);
++	WRITE_ONCE(drvdata.hdev, NULL);
+ 	hid_hw_close(hdev);
+ 	hid_hw_stop(hdev);
+ 	hid_set_drvdata(hdev, NULL);
+# Change: Stop HID when configuration probe fails.
+# Rationale: A failed configuration interface must not leave hardware started.
+@@ -2456,8 +2663,12 @@
+ 	}
+ 
+ 	ret = hid_go_cfg_probe(hdev, id);
+-	if (ret)
++	if (ret) {
+ 		dev_err_probe(&hdev->dev, ret, "Failed to start configuration interface\n");
++		hid_hw_close(hdev);
++		hid_hw_stop(hdev);
++		return ret;
++	}
+ 
+ 	dev_dbg(&hdev->dev, "Started Legion Go HID Device: %x\n", ep);
+ 
+# Change: Add project module attribution.
+# Rationale: The upstream module already declares its authors.
+@@ -2505,5 +2716,6 @@
+ module_hid_driver(hid_lenovo_go);
+ 
+ MODULE_AUTHOR("Derek J. Clark");
++MODULE_AUTHOR("GoldenRegulus");
+ MODULE_DESCRIPTION("HID Driver for Lenovo Legion Go Series Gamepads.");
+ MODULE_LICENSE("GPL");
