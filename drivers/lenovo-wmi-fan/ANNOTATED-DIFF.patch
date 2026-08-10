@@ -4,8 +4,8 @@
 
 --- a/drivers/platform/x86/lenovo/wmi-other.c
 +++ b/drivers/platform/x86/lenovo/wmi-other.c
-# Effect: Credits GoldenRegulus for the Legion Go Fan Method additions in a source file that already credits its upstream authors.
-# Why: Project changes to an upstream file need separate attribution without replacing the upstream notices.
+# Effect: Adds GoldenRegulus and the Legion Go Fan Method work to the source copyright notice.
+# Why: The existing notice names only the upstream authors, so it does not identify the author or scope of the added fan-control code.
 @@ -24,6 +24,9 @@
   * Copyright (C) 2025 Rong Zhang <i@rong.moe>
   *   - HWMON
@@ -16,8 +16,8 @@
   */
  
  #include <linux/acpi.h>
-# Effect: Adds the Linux helpers needed for DMI selection, locks, temporary buffers, string matching, and unaligned WMI data.
-# Why: Fan Method framing and safe removal require these kernel interfaces.
+# Effect: Includes the kernel APIs used for DMI matching, array helpers, mutexes, allocation, string comparison, and unaligned firmware fields.
+# Why: The new code must restrict fan controls by machine identity, serialize WMI calls with removal, allocate WMI replies, and decode packed little-endian data without assuming alignment.
 @@ -32,17 +35,23 @@
  #include <linux/component.h>
  #include <linux/container_of.h>
@@ -42,8 +42,8 @@
  #include <linux/wmi.h>
  
  #include <acpi/battery.h>
-# Effect: Adds the Fan Method WMI GUID and the method numbers used to get and set a complete curve.
-# Why: Curve control uses a different WMI object and methods than Other Mode.
+# Effect: Defines the Fan Method WMI GUID and its complete-curve read and write method numbers.
+# Why: Fan curves do not use the existing Other Mode GUID or its feature get/set methods. The WMI core needs the separate GUID and method IDs to reach the firmware curve operations.
 @@ -53,7 +62,11 @@
  #include "../firmware_attributes_class.h"
  
@@ -56,8 +56,8 @@
  enum lwmi_feature_id_cpu {
  	LWMI_FEATURE_ID_CPU_SPPT =	0x01,
  	LWMI_FEATURE_ID_CPU_SPL =	0x02,
-# Effect: Defines the Full Speed feature and the normal RPM capability condition used by the new interfaces.
-# Why: The existing WMI code identifies settings by encoded attributes. Full Speed needs its own typed feature so it cannot use a generic tuning path.
+# Effect: Defines the fan Full Speed feature ID and the capability bits that show whether normal RPM readback is available.
+# Why: Full Speed and RPM are separate firmware features. The driver needs the Full Speed ID for its get/set calls and must detect a missing normal RPM read path before it enables the fallback.
 @@ -83,7 +96,9 @@
  	LWMI_FEATURE_ID_PSU_CHARGE_BEHAVIOUR =	0x02,
  };
@@ -68,8 +68,8 @@
  
  #define LWMI_TYPE_ID_CROSSLOAD	0x01
  #define LWMI_TYPE_ID_PSU_AC	0x01
-# Effect: Builds the Other Mode attribute ID that methods 17 and 18 use for Full Speed.
-# Why: Other Mode methods receive one encoded attribute value, not a separate Full Speed argument. This ID selects the Full Speed feature.
+# Effect: Defines the encoded fan Full Speed attribute passed to Other Mode feature methods 17 and 18.
+# Why: Those methods select a setting from one combined device, feature, thermal-mode, and type value. Without this exact value, the call cannot address the fan Full Speed setting.
 @@ -102,6 +117,10 @@
  #define LWMI_CHARGE_TYPE_STANDARD	0x00
  #define LWMI_CHARGE_TYPE_LONGLIFE	0x01
@@ -81,8 +81,8 @@
  #define LWMI_ATTR_ID_FAN_RPM(x)                                   \
  	lwmi_attr_id(LWMI_DEVICE_ID_FAN, LWMI_FEATURE_ID_FAN_RPM, \
  		     LWMI_GZ_THERMAL_MODE_NONE, LWMI_FAN_ID(x))
-# Effect: Adds Original Go and source-known Go 2 selection, curve bounds, reply validation, complete-table serialization, and Boolean parsing.
-# Why: The Fan Method GUID is not handheld-exclusive, and the firmware transport is a complete ten-point table.
+# Effect: Adds DMI matching for supported Legion Go models, per-model curve limits, ten-point curve validation, firmware reply decoding, write serialization, and Full Speed Boolean validation.
+# Why: Lenovo exposes the Fan Method GUID on devices beyond these handhelds, so GUID presence alone cannot permit writes. Firmware exchanges a fixed complete table and can return malformed counts or out-of-range values, which the driver must reject before exposing data or sending a curve.
 @@ -112,7 +131,155 @@
  
  #define LWMI_OM_SYSFS_NAME "lenovo-wmi-other"
@@ -239,8 +239,8 @@
  static DEFINE_IDA(lwmi_om_ida);
  
  enum attribute_property {
-# Effect: Adds a small interface tag so removal can distinguish Other Mode state from Fan Method state.
-# Why: Other Mode and Fan Method have separate lifecycles and removal locks.
+# Effect: Adds an interface-type field at the start of each private device structure.
+# Why: The same WMI driver now binds two GUIDs, but its remove callback receives only the common device pointer. The field tells removal which private structure and cleanup function are valid.
 @@ -131,6 +298,7 @@
  };
  
@@ -249,8 +249,8 @@
  	struct component_master_ops *ops;
  
  	/* only valid after capdata bind */
-# Effect: Adds state for Full Speed sysfs lifecycle and for the RPM fallback decision.
-# Why: Sysfs and hwmon visibility must match supported handheld capability.
+# Effect: Adds Other Mode state for Full Speed serialization and removal, supported-handheld detection, attribute publication, and RPM fallback visibility.
+# Why: Full Speed must not run while its sysfs file is being removed, and it must appear only on matched handhelds. The driver must also remember whether it exposed RPM despite missing normal capability bits.
 @@ -144,6 +312,11 @@
  	int ida_id;
  
@@ -263,8 +263,8 @@
  
  	struct {
  		bool capdata00_collected : 1;
-# Effect: Adds Fan Method device state, including its WMI device, selected curve limit, lock, and removal flag.
-# Why: Curve WMI calls must be serialized and rejected during removal.
+# Effect: Adds private Fan Method state with the WMI device, matched model limits, a mutex, and a removal flag.
+# Why: Curve reads and writes share one firmware method endpoint and must not overlap. The removal flag prevents a sysfs operation from starting after device teardown begins.
 @@ -154,6 +327,14 @@
  	const struct power_supply_ext *battery_ext;
  	struct acpi_battery_hook battery_hook;
@@ -280,8 +280,8 @@
  };
  
  /*
-# Effect: Makes `fan1_input` visible when a supported handheld lacks the normal RPM capability path.
-# Why: Userspace needs actual fan RPM when the native capability path is absent.
+# Effect: Makes the first fan's RPM input attribute read-only when the handheld fallback flag is set, even if normal capability data did not expose it.
+# Why: Supported Legion Go firmware can provide RPM through the existing Other Mode call while omitting the capability bits that normally publish `fan1_input`. Without this exception, userspace cannot read available tachometer data.
 @@ -256,6 +437,10 @@
  	bool visible = false;
  
@@ -293,8 +293,8 @@
  		if (!(priv->fan_info[channel].supported & LWMI_SUPP_VALID))
  			return 0;
  
-# Effect: Rejects the firmware sentinel value that represents an unavailable RPM reading.
-# Why: Firmware uses this sentinel for no RPM value. Returning it through hwmon would present an impossible fan speed as real data.
+# Effect: Returns `-EIO` when fallback RPM readback returns the firmware value `0xffffffff`.
+# Why: Firmware uses this value to report that no RPM measurement is available. Exposing it as RPM would make userspace display 4,294,967,295 as a real fan speed.
 @@ -329,6 +514,8 @@
  			err = lwmi_om_fan_get_set(priv, channel, &retval, false);
  			if (err)
@@ -304,8 +304,8 @@
  
  			*val = retval;
  			return 0;
-# Effect: Recomputes whether the RPM fallback is needed after capability information is collected.
-# Why: Probe and unbind must not retain stale hwmon visibility.
+# Effect: Clears the RPM fallback flag before the driver evaluates newly collected fan capability data.
+# Why: Capability collection can run again after unbind or rebind. Keeping the old flag could publish `fan1_input` even when the new capability state does not require the fallback.
 @@ -459,6 +646,7 @@
  		dev_warn(&priv->wdev->dev, "fan RPM constraint relaxed. Use with caution\n");
  
@@ -314,8 +314,8 @@
  	for (i = 0; i < LWMI_FAN_NR; i++) {
  		if (!(priv->fan_info[i].supported & LWMI_SUPP_VALID))
  			continue;
-# Effect: Creates the RPM fallback only on a selected handheld when normal RPM support is incomplete.
-# Why: The fallback must not alter non-handheld Lenovo devices.
+# Effect: Enables fallback RPM visibility only for a matched handheld when fan 0 lacks either valid or readable normal RPM capability, and counts that channel for hwmon registration.
+# Why: Legion Go firmware can omit these capability bits while its RPM method still works. Restricting the exception by DMI prevents the driver from exposing an unproved read path on other Lenovo systems.
 @@ -473,6 +661,13 @@
  			valid--;
  		}
@@ -330,8 +330,8 @@
  
  	if (valid == 0) {
  		dev_warn(&priv->wdev->dev,
-# Effect: Clears the RPM fallback decision when capability state is reset.
-# Why: Later probing must recompute the visible interface.
+# Effect: Clears the RPM fallback flag when the driver discards collected fan capability state.
+# Why: A later bind must derive hwmon visibility from fresh capability data. Otherwise an earlier device state can leave `fan1_input` visible incorrectly.
 @@ -538,6 +733,7 @@
  
  	priv->fan_flags.capdata00_collected = false;
@@ -340,8 +340,8 @@
  }
  
  /**
-# Effect: Adds the Full Speed sysfs attribute, complete-curve sysfs attribute, Fan Method probe, and safe removal paths.
-# Why: Full Speed, curve, and RPM use independent firmware routes and need bounded typed sysfs interfaces.
+# Effect: Adds a Boolean `fan_fullspeed` file through Other Mode and a ten-value `fan_curve` file through Fan Method, with parsing, bounds, DMI-gated probe, locking, and removal checks.
+# Why: Firmware provides Full Speed and complete curves through different GUIDs and call formats. The driver must reject values outside `0|1`, malformed or decreasing curves, unsupported machines, and operations that race device removal.
 @@ -588,8 +784,251 @@
  out:
  	priv->fan_flags.capdata_fan_collected = true;
@@ -594,8 +594,8 @@
  /* ======== Power Supply Extension (component: lenovo-wmi-capdata 00) ======== */
  
  /**
-# Effect: Corrects a comment to describe the thermal-mode value actually used by the code.
-# Why: The code uses the thermal-mode notifier, not a GameZone driver query.
+# Effect: Changes the parameter description from a GameZone mode to the thermal-mode value that the function encodes.
+# Why: Callers pass the value obtained through the thermal-mode path. The old text directs reviewers to a different driver and gives the wrong source for this argument.
 @@ -978,7 +1417,7 @@
  /**
   * tunable_attr_01_id() - Formats a tunable_attr_01 to a capdata attribute ID
@@ -605,8 +605,8 @@
   *
   * Return: encoded capability data attribute ID.
   */
-# Effect: Corrects a comment to describe the thermal-mode notifier that gates custom profile writes.
-# Why: The code uses the thermal-mode notifier, not a GameZone driver query.
+# Effect: Updates the write-helper documentation to state that it obtains the current profile through the thermal-mode notifier.
+# Why: The function does not query `lenovo-wmi-gamezone`. The old description gives the wrong dependency and can mislead maintainers who trace why non-custom writes are rejected.
 @@ -1203,9 +1642,9 @@
   * @tunable_attr: The attribute to be stored.
   *
@@ -620,8 +620,8 @@
   * any integer attribute's "_store" function. The integer to be sent to the WMI
   * method is range checked and an error code is returned if out of range.
   *
-# Effect: Corrects a comment to describe the thermal-mode notifier that gates custom profile reads.
-# Why: The code uses the thermal-mode notifier, not a GameZone driver query.
+# Effect: Updates the read-helper documentation to state that it obtains the current profile through the thermal-mode notifier.
+# Why: The function does not query `lenovo-wmi-gamezone`. The old description gives the wrong path for the profile value used during a read.
 @@ -1265,8 +1704,8 @@
   * @tunable_attr: The attribute to be read.
   *
@@ -633,8 +633,8 @@
   * attribute's "_show" function.
   *
   * If the WMI is success the sysfs attribute is notified.
-# Effect: Splits the original probe into an Other Mode probe and a Fan Method probe, selected by a typed interface context.
-# Why: One driver must own both exact GUIDs while preserving their separate probe and remove paths.
+# Effect: Renames the original probe as the Other Mode-specific probe and prepares it to coexist with a separate Fan Method probe.
+# Why: The two GUIDs allocate different private structures and publish different files. A single undifferentiated probe cannot initialize the correct state for both devices.
 @@ -1683,10 +2122,14 @@
  	.unbind = lwmi_om_master_unbind,
  };
@@ -651,8 +651,8 @@
  
  	priv = devm_kzalloc(&wdev->dev, sizeof(*priv), GFP_KERNEL);
  	if (!priv)
-# Effect: Reads DMI identity, exposes Full Speed only for selected handhelds, and removes it on probe failure or device removal.
-# Why: Full Speed must be unavailable on unrelated devices and removed safely on errors or unbind.
+# Effect: DMI-gates Full Speed, removes its file on later probe failure, dispatches probe and removal by GUID context, and adds the Fan Method GUID to the match table.
+# Why: Other Lenovo devices can expose Other Mode without supporting this Full Speed control. The shared driver also needs to call the correct setup and teardown code because Other Mode and Fan Method use different state and resources.
 @@ -1694,25 +2137,80 @@
  
  	/* Sentinel for on-demand ida_free(). */
@@ -739,8 +739,8 @@
  	{}
  };
  
-# Effect: Registers the Fan Method GUID beside Other Mode and updates module metadata for the combined driver.
-# Why: The WMI core probes only GUIDs in this table. Without the Fan Method entry, the curve interface never receives a probe call.
+# Effect: Adds GoldenRegulus to module authorship and changes the module description to include Fan Method support.
+# Why: The GUID table above now makes this module handle both Other Mode and Fan Method devices. Metadata must describe the added function and identify the author of that code.
 @@ -1734,5 +2232,6 @@
  MODULE_DEVICE_TABLE(wmi, lwmi_other_id_table);
  MODULE_AUTHOR("Derek J. Clark <derekjohn.clark@gmail.com>");
