@@ -2007,3 +2007,53 @@ Battery diagnosis found a stale installed helper. It reports the obsolete `charg
 Plugin `0.12.0` changes an existing but stale backend action to Update backend and adds Remove backend through a fixed one-shot Desktop Mode uninstaller. The 80% control remains disabled until Update installs the current root-owned helper. Cooling now places Full Speed above compact Quiet, Balanced, Performance, and Custom mode controls. All ten curves remain visible; preset curves are read-only and Custom is editable. Exact Quiet and Balanced exceptions remain accepted. A separate read-only timer updates fan RPM every five seconds. Controllers now shows connected generations, identifies Menu/View as a saved request because firmware has no readback, uses a Calibrate heading and compact button flow, and renames Repair to Install calibration support. The latter is required because the HID service is enabled but failed: its immutable release does not contain a module for the running kernel, and calibration error attributes are absent.
 
 GDScript lint, Bash syntax, archive checks, and whitespace checks passed. Plugin `0.12.0` archive SHA-256 is `f53296ce9353cb2e572a83aeb5c1160e19505cbe79d4b10a6f5f23f198978ea9`. Steam, OGUI, InputPlumber, and the WMI service are active. No plugin parse or script error was found after initialization.
+
+## Source installation and current-kernel lifecycle — 2026-08-11
+
+The live Original Legion Go ran Bazzite testing with kernel
+`7.1.8-ogc1.1.fc44.x86_64`. The test started after a kernel update. The old HID
+and WMI services were enabled but could not start because they had no module for
+the new kernel.
+
+A clean public clone exposed three installation faults. The source instructions
+did not list Cargo, Rust, Godot, or current kernel headers. Backend preflight
+required `charge_types` before it installed the WMI module that provides that
+file. A first backend installation also returned success while both project
+driver services remained disabled. Versions 0.12.8 through 0.12.12 corrected
+these faults and removed repository-only files from the plugin package.
+
+The final source build used Rust 1.87 or newer and Godot 4.7.1. It built the
+OGUI native extension, the three restricted helpers, and plugin 0.12.12. The
+plugin ZIP passed archive checks and contained the required helper payloads,
+driver sources, and packaging scripts. It excluded repository documents, Git
+files, tests, and annotated diffs. OGUI's GUT editor plugin reported a missing
+first-run editor configuration during import. Export still completed, and the
+installed plugin initialized without a plugin script or parse error.
+
+The backend installer built both kernel modules with warnings treated as
+errors, requested administrator approval, installed the helpers and Polkit
+rule, replaced the stock driver owners, and enabled both services on a first
+installation. An update with both services enabled rebuilt, replaced, and
+reactivated both modules. An update with both services disabled rebuilt both
+modules and kept both services disabled. Polkit checks passed for all three
+helpers.
+
+Removal restored the stock `hid_lenovo_go` and `lenovo_wmi_other` modules,
+removed both project services and all three helpers, and left InputPlumber
+active. A fresh reinstall from that stock state enabled and activated both
+project modules. The device then completed a clean reboot with the project HID
+and WMI services, InputPlumber, and OGUI active.
+
+The battery helper completed `80 → 100 → 80` with readback and left Long Life
+at 80%. The fan helper enabled and disabled Full Speed with readback. RPM rose
+from about 3,700 to 8,325 while Full Speed was active. The curve remained
+`0 0 0 0 50 75 90 115 125 125` before, during, and after the test.
+
+An RTC wake test completed suspend and resume. HID, WMI, InputPlumber, battery
+state, Full Speed off, and the complete fan curve remained available after
+resume. The final clean boot and all lifecycle tests had no kernel fault match.
+
+Final live state: plugin 0.12.12 is installed and initialized. InputPlumber,
+the project HID service, and the project WMI service are enabled and active.
+Battery mode is Long Life at 80%. Full Speed is off. The firmware curve is
+`0 0 0 0 50 75 90 115 125 125`.
