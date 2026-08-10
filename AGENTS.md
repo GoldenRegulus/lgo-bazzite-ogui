@@ -3,10 +3,10 @@
 ## Writing
 
 - State the answer first.
-- Use the fewest words that preserve the technical meaning.
-- Give the reason when it is needed to understand or verify the answer.
-- Do not repeat the answer, context, or process.
-- Remove comments and prose that only restate the code.
+- Use clear, simple English.
+- Include context and reasons when they help the reader understand or verify the answer.
+- Do not remove useful facts only to make text shorter.
+- Remove words, comments, and prose that add no fact or only restate the code.
 
 Read `.pi/PROJECT-ROLLUP.md` first when it exists. It is private and Git-ignored.
 
