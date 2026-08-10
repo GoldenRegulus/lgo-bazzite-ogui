@@ -5,6 +5,8 @@
 - State the answer first.
 - Use clear, simple English.
 - Include context and reasons when they help the reader understand or verify the answer.
+- Write literal statements. Do not use hyperbole, boilerplate labels, or emphasis words.
+- Do not make a reviewer infer meaning or filter out extra words.
 - Do not remove useful facts only to make text shorter.
 - Remove words, comments, and prose that add no fact or only restate the code.
 
