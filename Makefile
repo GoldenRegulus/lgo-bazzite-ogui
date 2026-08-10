@@ -25,7 +25,7 @@ help: ## Display this help.
 install: backend $(PLUGINS_DIR)/$(PLUGIN_ID) export_preset ## Build and install the plugin from source.
 	@test "`id -u`" != 0 || (echo "Run make as a regular user, not root." >&2; exit 1)
 	@echo "Exporting plugin package"
-	cd $(OPENGAMEPAD_UI_BASE) && $(MAKE) addons
+	cd $(OPENGAMEPAD_UI_BASE) && $(MAKE) extensions
 	mkdir -p "$(INSTALL_DIR)"
 	rm -f "$(INSTALL_DIR)/$(PLUGIN_ID).zip"
 	rm -rf "$(INSTALL_DIR)/$(PLUGIN_ID)"

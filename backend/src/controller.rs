@@ -333,6 +333,7 @@ impl ControllerBackend {
     }
 
     /// Test backend with explicit roots.
+    #[cfg(test)]
     pub fn for_roots(root: &Path, state_root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),

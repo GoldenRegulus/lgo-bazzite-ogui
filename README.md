@@ -27,7 +27,7 @@ The full-screen menu has Battery, Cooling, and Controllers pages.
 
 ## Status
 
-Version `0.12.10` works on the live-verified Original Legion Go.
+Version `0.12.11` works on the live-verified Original Legion Go.
 
 The current fan range is a project safety limit. It is not a proved EC maximum.
 
@@ -39,8 +39,8 @@ Legion Go. It can break after a kernel update and has no broad support promise.
 
 ## Installation
 
-Source installation needs Linux x86-64, Git, Make, Cargo, Rust, `bc`, Base64,
-and the Godot 4.7 editor. Install the kernel headers for the running kernel
+Source installation needs Linux x86-64, Git, Make, Cargo, Rust 1.87 or newer,
+`bc`, Base64, and the Godot 4.7 editor. Install the kernel headers for the running kernel
 before you install the backend.
 
 Download or clone the source. In the project directory, run:
