@@ -66,8 +66,12 @@ WMI_DRIVER_DIR="$BUILD_ROOT/drivers/lenovo-wmi-fan"
 WMI_PACKAGE_DIR="$BUILD_ROOT/packaging/lenovo-wmi-tuning"
 KERNEL_INSTALLER="$BUILD_ROOT/backend/install-kernel-drivers.sh"
 
-# Check the exact device before elevation. Installed copies are checked again below.
-if ! "$BUNDLED_HELPER" status || ! "$BUNDLED_CONTROLLER" status; then
+# Check the exact device before elevation. The stock WMI module on a new
+# kernel can omit charge_types until this installer replaces it.
+battery_status=0
+"$BUNDLED_HELPER" status >/dev/null || battery_status=$?
+if [[ $battery_status -ne 0 && $battery_status -ne 4 ]] || \
+   ! "$BUNDLED_CONTROLLER" status; then
   printf '%s\n' 'The local helper did not verify this supported device.' >&2
   exit 5
 fi
@@ -111,7 +115,10 @@ printf '%s\n' 'Administrator consent is required to install the bounded helpers.
 /usr/bin/sudo /usr/bin/bash "$KERNEL_INSTALLER"
 /usr/bin/sudo /usr/bin/systemctl restart polkit.service
 
-if ! "$HELPER_PATH" status || ! "$CONTROLLER_PATH" status || \
+installed_battery_status=0
+"$HELPER_PATH" status >/dev/null || installed_battery_status=$?
+if [[ $installed_battery_status -ne 0 && $installed_battery_status -ne 4 ]] || \
+   ! "$CONTROLLER_PATH" status || \
    [[ "$(/usr/bin/sha256sum "$BUNDLED_FAN" | /usr/bin/awk '{print $1}')" != \
       "$(/usr/bin/sha256sum "$FAN_PATH" | /usr/bin/awk '{print $1}')" ]]; then
   printf '%s\n' 'Installed helper verification failed.' >&2

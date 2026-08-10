@@ -44,7 +44,7 @@ Do not use `sudo`. The installer asks for administrator access when needed. It b
 /etc/polkit-1/rules.d/49-legion-go-ogui-helper.rules
 ```
 
-Fan control uses the integrated Lenovo WMI owner. The installer packages its module but does not activate it automatically. The module service stays disabled until explicit validation and activation. The installer restores the HID service only when it was enabled before the update.
+Fan control uses the integrated Lenovo WMI owner. A first installation packages its module and leaves its service disabled. After a kernel update, the installer rebuilds and restores WMI tuning only when its service was already enabled. It also restores HID only when its service was already enabled.
 
 ## Install at the next login
 

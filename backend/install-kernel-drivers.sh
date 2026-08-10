@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Install the exact-kernel HID and WMI tuning modules that the unprivileged
-# installer built. This script does not automatically activate the WMI tuning
-# module. The HID module is installed with its prior enabled state preserved.
+# installer built. Restore WMI tuning when it was enabled before a kernel
+# update. A first installation leaves it disabled. Preserve the prior HID
+# service-enabled state.
 set -Eeuo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -88,13 +89,10 @@ systemctl reset-failed "$wmi_unit" || true
 
 "$wmi_package/scripts/install.sh"
 
-# WMI tuning is never automatically activated by this script.
-# The user must activate it explicitly with:
-#   /usr/local/lib/legion-go-ogui/wmi-tuning/current/activate.sh
 if [[ $wmi_was_enabled -eq 1 ]]; then
+  "$wmi_current/activate.sh"
   systemctl enable "$wmi_unit"
-  printf '%s\n' "WMI tuning service was previously enabled; enabling the new unit."
-  printf '%s\n' "Run current/activate.sh for a controlled start."
+  printf '%s\n' "Restored the enabled WMI tuning driver for $(uname -r)."
 else
   printf '%s\n' "Installed WMI tuning driver for $(uname -r)."
   printf '%s\n' "The service is disabled. Use current/activate.sh for a controlled start."
