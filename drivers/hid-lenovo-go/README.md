@@ -12,7 +12,7 @@ The driver does not check the computer model. Install scripts require:
 
 ## Status
 
-Do not install or load this driver yet.
+This driver is released for the live-verified Original Legion Go. Install it through the backend workflow only.
 
 Local build, code checks, and KUnit build pass. KUnit has not run on the Legion Go's current kernel.
 
@@ -38,7 +38,7 @@ Read the [requirements](../../REQUIREMENTS.md) and [test results](../../wiki/Val
 
 Scripts: [`../../packaging/hid-lenovo-go/`](../../packaging/hid-lenovo-go/).
 
-Do not run these commands until the driver builds and all KUnit tests pass on the Legion Go:
+Run these commands only on the live-verified Original Legion Go:
 
 ```sh
 sudo packaging/hid-lenovo-go/scripts/install.sh
