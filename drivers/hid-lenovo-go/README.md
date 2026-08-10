@@ -16,7 +16,7 @@ This driver is released for the live-verified Original Legion Go. Install it thr
 
 Local build, code checks, and KUnit build pass. KUnit has not run on the Legion Go's current kernel.
 
-- Changes from OGC5: 319 lines added and 109 lines removed.
+See the [kernel change record](CHANGES.md).
 
 ## Build
 
