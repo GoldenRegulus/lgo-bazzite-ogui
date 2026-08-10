@@ -1,0 +1,15 @@
+Copyright (c) 2026 GoldenRegulus
+
+This repository contains files under more than one license.
+
+Project-owned files without another SPDX license identifier are available under
+the MIT License. See `LICENSES/MIT.txt`.
+
+Linux-derived source and its GPL-marked support files retain their SPDX license
+identifiers. They are available under GPL-2.0-or-later, except where the file
+identifies a different GPL variant. See `LICENSES/GPL-2.0-or-later.txt`.
+
+The upstream copyright and license notices in Linux-derived files remain in
+effect. This notice does not change them.
+
+See `LICENSES/README.md` for the file groups.

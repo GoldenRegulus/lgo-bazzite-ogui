@@ -1,0 +1,1 @@
+../../../drivers/lenovo-wmi-fan/wmi-other.c

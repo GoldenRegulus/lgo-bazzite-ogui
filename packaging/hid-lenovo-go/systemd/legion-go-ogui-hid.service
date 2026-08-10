@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Corrected original Legion Go HID driver
+After=systemd-modules-load.service
+Before=inputplumber.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/legion-go-ogui/hid/current/load.sh
+ExecStop=/usr/local/lib/legion-go-ogui/hid/current/unload.sh
+RemainAfterExit=yes
+TimeoutStartSec=60
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

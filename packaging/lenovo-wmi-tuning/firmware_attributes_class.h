@@ -1,0 +1,1 @@
+include/firmware_attributes_class.h

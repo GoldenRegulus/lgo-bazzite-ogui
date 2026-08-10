@@ -1,0 +1,15 @@
+// Permit only the installed bounded helper for an active local desktop session.
+polkit.addRule(function(action, subject) {
+  var program = action.lookup("program");
+  var helper = program === "/usr/local/libexec/legion-go-ogui-helper" ||
+      program === "/var/usrlocal/libexec/legion-go-ogui-helper" ||
+      program === "/usr/local/libexec/legion-go-ogui-controller" ||
+      program === "/var/usrlocal/libexec/legion-go-ogui-controller" ||
+      program === "/usr/local/libexec/legion-go-ogui-fan" ||
+      program === "/var/usrlocal/libexec/legion-go-ogui-fan";
+  if (action.id === "org.freedesktop.policykit.exec" && helper &&
+      subject.active === true && subject.local === true) {
+    return polkit.Result.YES;
+  }
+  return polkit.Result.NOT_HANDLED;
+});

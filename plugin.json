@@ -1,0 +1,14 @@
+{
+  "plugin.id": "legion-go",
+  "plugin.name": "Legion Go",
+  "plugin.version": "0.12.7",
+  "plugin.min-api-version": "2.0.0",
+  "plugin.link": "https://github.com/GoldenRegulus/lgo-bazzite-ogui",
+  "plugin.source": "https://github.com/GoldenRegulus/lgo-bazzite-ogui",
+  "plugin.description": "Legion Go hardware controls for Bazzite Deck GNOME.",
+  "store.tags": ["quick-bar", "hardware", "legion-go"],
+  "store.images": [],
+  "author.name": "GoldenRegulus",
+  "author.email": "",
+  "entrypoint": "plugin.gd"
+}

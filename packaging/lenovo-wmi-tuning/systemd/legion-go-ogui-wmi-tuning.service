@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Original Legion Go Lenovo WMI tuning driver
+After=systemd-modules-load.service
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/legion-go-ogui/wmi-tuning/current/load.sh
+ExecStop=/usr/local/lib/legion-go-ogui/wmi-tuning/current/unload.sh
+RemainAfterExit=yes
+TimeoutStartSec=60
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

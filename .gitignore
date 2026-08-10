@@ -1,0 +1,6 @@
+.godot
+.pi/
+.playwright-cli/
+backend/payload
+backend/target
+research/

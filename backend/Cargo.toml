@@ -1,0 +1,22 @@
+[package]
+name = "legion-go-ogui-helper"
+version = "0.1.0"
+edition = "2021"
+description = "Bounded Lenovo Legion Go battery charge-limit helper"
+license = "MIT"
+
+[lib]
+name = "legion_go_ogui_helper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "legion-go-ogui-helper"
+path = "src/main.rs"
+
+[[bin]]
+name = "legion-go-ogui-controller"
+path = "src/bin/controller.rs"
+
+[[bin]]
+name = "legion-go-ogui-fan"
+path = "src/bin/fan.rs"
