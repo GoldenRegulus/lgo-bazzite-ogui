@@ -440,7 +440,7 @@ These items are part of the desired product. Core features take priority.
 - [ ] Canceling privilege escalation causes no installation and no repeated automatic prompt.
 - [x] Updates preserve supported settings or perform a documented migration.
 - [ ] Rollback restores the earlier working version.
-- [ ] The release records source revisions and tested component versions.
+- [x] The release records source revisions and tested component versions.
 
 ## 8. Explicit non-goals for the first release
 

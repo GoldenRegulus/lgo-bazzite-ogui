@@ -39,18 +39,28 @@ Legion Go. It can break after a kernel update and has no broad support promise.
 
 ## Installation
 
-Source installation needs Linux x86-64, Git, Make, Cargo, Rust 1.87 or newer,
-`bc`, Base64, and the Godot 4.7 editor. Install the kernel headers for the running kernel
-before you install the backend.
-
-Download or clone the source. In the project directory, run:
+Download the tested plugin package from the latest GitHub release. Do not
+extract it.
 
 ```sh
-make
+mkdir -p ~/.local/share/opengamepadui/plugins
+curl -L https://github.com/GoldenRegulus/lgo-bazzite-ogui/releases/latest/download/legion-go.zip \
+  -o ~/.local/share/opengamepadui/plugins/legion-go.zip
 ```
 
-Run this command as a regular user. It builds and installs the plugin locally.
-Then open its settings and select **Install backend**. Backend setup requires administrator approval.
+Restart OGUI or restart the device. Open the Legion Go plugin settings and
+select **Install backend**. Backend setup requires administrator approval. It
+builds both kernel modules for the running kernel. The matching kernel headers
+and C build tools must be available.
+
+## Development source build
+
+A source build is not required for normal installation. It needs Linux x86-64,
+Git, Make, Cargo, Rust 1.87 or newer, `bc`, Base64, the Godot 4.7 editor, and the
+headers for the running kernel.
+
+Run `make` as a regular user in the project directory. It builds and exports
+`legion-go.zip` to the local OGUI plugin directory.
 
 ## Permissions
 

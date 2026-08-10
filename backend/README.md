@@ -11,7 +11,7 @@ cargo build --release --locked
 cargo test --locked
 ```
 
-To build and install the plugin from source, run `make` in the repository root. It builds temporary local payloads and removes them after installation.
+Normal users install the tested `legion-go.zip` package from a GitHub release. Maintainers can run `make` in the repository root to build and export the plugin from source. This creates temporary local payloads and removes them after export.
 
 Use `Cargo.lock`. The scripts do not download files.
 
@@ -33,7 +33,7 @@ The tools do not accept paths, raw HID reports, ACPI methods, shell commands, or
 
 **Warning:** Installation changes `/usr/local` and `/etc`. Run it only on the supported device.
 
-Install the plugin from source first. Then open its settings and select **Install backend**.
+Install the released plugin package first. Then open its settings and select **Install backend**.
 
 Do not use `sudo`. The installer asks for administrator access when needed. It builds and packages the HID and integrated Lenovo WMI modules for the running kernel. It installs these tools and the Polkit rule:
 
