@@ -5,7 +5,7 @@
 --- a/drivers/hid/hid-lenovo-go.c
 +++ b/drivers/hid/hid-lenovo-go.c
 # Effect: Credits GoldenRegulus for project changes in a source file that already credits its upstream authors.
-# Why: The upstream file already has copyright and module-author notices.
+# Why: Project changes to an upstream file need separate attribution without replacing the upstream notices.
 @@ -4,6 +4,7 @@
   *
   *  Copyright (c) 2026 Derek J. Clark <derekjohn.clark@gmail.com>
@@ -15,7 +15,7 @@
  
  #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 # Effect: Adds the lock type used to protect the one pending synchronous command while raw input receives replies.
-# Why: Reply-state updates run in the raw HID event path.
+# Why: Raw input can receive a reply while the waiting path clears a timeout. The lock makes one result authoritative.
 @@ -21,6 +22,7 @@
  #include <linux/led-class-multicolor.h>
  #include <linux/mutex.h>
@@ -25,7 +25,7 @@
  #include <linux/types.h>
  #include <linux/unaligned.h>
 # Effect: Adds request state, calibration result structures, error fields, and helpers for bounded 64-byte output reports.
-# Why: A synchronous reply must match its request, and calibration completion needs result and error storage.
+# Why: Firmware has no sequence token. The driver must retain the expected command, sub-command, result, and calibration error state itself.
 @@ -31,23 +33,53 @@
  #include "hid-ids.h"
  
@@ -82,7 +82,7 @@
  	u8 gp_left_version_gen;
  	u32 gp_left_version_hardware;
 # Effect: Stores a separate 16-bit firmware error for each right-controller calibration control.
-# Why: Each supported calibration control needs its own firmware-error readback.
+# Why: A completion report contains an error for one control. Sharing one error field could show that error for a different control.
 @@ -56,10 +88,13 @@
  	u8 gp_mode;
  	u8 gp_right_auto_sleep_time;
@@ -207,7 +207,7 @@
  static int hid_go_version_event(struct command_report *cmd_rep)
  {
 # Effect: Uses one lookup to find the status and error fields for a selected controller and calibration module.
-# Why: One helper prevents mismatched status and error attributes.
+# Why: Six controls would otherwise repeat separate switches and could map a status to one control and an error to another.
 @@ -575,35 +710,42 @@
  	}
  }
@@ -384,7 +384,7 @@
  
  static ssize_t version_show(struct device *dev, struct device_attribute *attr,
 # Effect: Rejects zero for feature controls whose accepted text starts at the first named enabled value.
-# Why: These firmware controls have a defined nonzero accepted set.
+# Why: The firmware interface has no supported zero form for these controls. Sending zero would create an empty configuration request.
 @@ -902,6 +1059,8 @@
  	case FEATURE_LIGHT_ENABLE:
  	case FEATURE_TOUCHPAD_ENABLE:
@@ -619,7 +619,7 @@
  	&dev_attr_auto_sleep_time_left.attr,
  	&dev_attr_auto_sleep_time_left_range.attr,
 # Effect: Adds the left-controller error attributes to the published sysfs group.
-# Why: Defined attributes must be part of the device group.
+# Why: Linux exposes only attributes named in the group. Without these entries, the new left-controller error files do not exist.
 @@ -1950,6 +2126,9 @@
  	&dev_attr_cal_trigg_left.attr,
  	&dev_attr_cal_trigg_left_index.attr,
@@ -667,7 +667,7 @@
  	&dev_attr_auto_sleep_time_right.attr,
  	&dev_attr_auto_sleep_time_right_range.attr,
 # Effect: Adds the right-controller error attributes to the published sysfs group.
-# Why: Defined attributes must be part of the device group.
+# Why: Linux exposes only attributes named in the group. Without these entries, the new right-controller error files do not exist.
 @@ -2057,6 +2245,9 @@
  	&dev_attr_cal_trigg_right.attr,
  	&dev_attr_cal_trigg_right_index.attr,
@@ -782,7 +782,7 @@
  	dev_dbg(&hdev->dev, "Started Legion Go HID Device: %x\n", ep);
  
 # Effect: Credits GoldenRegulus in module metadata while retaining the upstream module author.
-# Why: The upstream module already declares its authors.
+# Why: Project changes to a module with upstream author metadata need separate attribution without replacing the upstream authors.
 @@ -2505,5 +2716,6 @@
  module_hid_driver(hid_lenovo_go);
  
