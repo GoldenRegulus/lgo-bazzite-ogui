@@ -196,7 +196,7 @@ Acceptance criteria:
 - [ ] Performance submits Lenovo's value-`4` table `44 48 55 60 71 79 87 87 100 100`.
 - [x] Full Speed uses the verified independent Full Speed feature.
 - [ ] Custom submits one complete verified fan curve.
-- [ ] Enabling or disabling Full Speed does not change the selected curve. Disabling it reveals the previously selected curve.
+- [x] Enabling or disabling Full Speed does not change the selected curve. Disabling it reveals the previously selected curve.
 - [ ] Fan settings do not change the separate Lenovo power or thermal profile, TDP, or power limits. Do not substitute `SetSmartFanMode` or Linux `platform_profile` for Legion Space's separate `SetFanMode` path.
 - [ ] The plugin reads and shows the active firmware fan state. It does not replace it with a plugin preference after restart.
 - [ ] The kernel interface serializes bounded transport calls. It does not save, infer, confirm, restore, or persist fan policy.
@@ -433,12 +433,12 @@ These items are part of the desired product. Core features take priority.
 
 - [ ] The OGUI plugin installs from the OGUI plugin store.
 - [ ] The plugin can schedule a one-time backend installer for the next GNOME Desktop session only after explicit user action.
-- [ ] Manual backend install and uninstall instructions work on an unmodified target image.
-- [ ] The package or installation method respects Bazzite's immutable system model.
-- [ ] The installer builds the HID and integrated OpenGamingCollective Lenovo WMI modules from reviewed source against the running host kernel. The plugin does not contain prebuilt kernel modules.
-- [ ] A kernel update presents one explicit repair action. Rebuilding preserves each prior service-enabled state without replacing a stock kernel module on disk.
+- [x] Manual backend install and uninstall instructions work on an unmodified target image.
+- [x] The package or installation method respects Bazzite's immutable system model.
+- [x] The installer builds the HID and integrated OpenGamingCollective Lenovo WMI modules from reviewed source against the running host kernel. The plugin does not contain prebuilt kernel modules.
+- [x] A kernel update presents one explicit repair action. Rebuilding preserves each prior service-enabled state without replacing a stock kernel module on disk.
 - [ ] Canceling privilege escalation causes no installation and no repeated automatic prompt.
-- [ ] Updates preserve supported settings or perform a documented migration.
+- [x] Updates preserve supported settings or perform a documented migration.
 - [ ] Rollback restores the earlier working version.
 - [ ] The release records source revisions and tested component versions.
 

@@ -27,7 +27,7 @@ The full-screen menu has Battery, Cooling, and Controllers pages.
 
 ## Status
 
-Version `0.12.11` works on the live-verified Original Legion Go.
+Version `0.12.12` works on the live-verified Original Legion Go.
 
 The current fan range is a project safety limit. It is not a proved EC maximum.
 

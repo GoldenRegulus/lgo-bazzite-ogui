@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the exact-kernel HID and WMI tuning modules that the unprivileged
-# installer built. The user has already selected backend installation and
-# approved administrator access, so activate and enable both modules.
+# installer built. A first installation activates and enables both modules.
+# An update preserves each prior service-enabled state.
 set -Eeuo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -40,8 +40,12 @@ fail() {
 # -- HID driver --
 
 hid_was_enabled=0
+hid_was_installed=0
 if systemctl is-enabled --quiet "$hid_unit"; then
   hid_was_enabled=1
+fi
+if [[ -L $hid_current ]]; then
+  hid_was_installed=1
 fi
 
 restore_hid_enabled() {
@@ -65,13 +69,26 @@ systemctl reset-failed "$hid_unit" || true
 
 "$hid_package/scripts/install.sh"
 
-"$hid_current/activate.sh"
-systemctl enable "$hid_unit"
+if [[ $hid_was_installed -eq 0 || $hid_was_enabled -eq 1 ]]; then
+  "$hid_current/activate.sh"
+  systemctl enable "$hid_unit"
+  printf '%s\n' "Installed and enabled HID driver for $(uname -r)"
+else
+  printf '%s\n' "Installed HID driver for $(uname -r); service remains disabled"
+fi
 
 trap - ERR
-printf '%s\n' "Installed and enabled HID driver for $(uname -r)"
 
 # -- WMI tuning driver --
+
+wmi_was_enabled=0
+wmi_was_installed=0
+if systemctl is-enabled --quiet "$wmi_unit"; then
+  wmi_was_enabled=1
+fi
+if [[ -L $wmi_current ]]; then
+  wmi_was_installed=1
+fi
 
 if [[ -f $wmi_state/active && -x $wmi_current/deactivate.sh ]]; then
   "$wmi_current/deactivate.sh" || fail 'WMI tuning deactivation failed'
@@ -81,6 +98,10 @@ systemctl reset-failed "$wmi_unit" || true
 
 "$wmi_package/scripts/install.sh"
 
-"$wmi_current/activate.sh"
-systemctl enable "$wmi_unit"
-printf '%s\n' "Installed and enabled WMI tuning driver for $(uname -r)."
+if [[ $wmi_was_installed -eq 0 || $wmi_was_enabled -eq 1 ]]; then
+  "$wmi_current/activate.sh"
+  systemctl enable "$wmi_unit"
+  printf '%s\n' "Installed and enabled WMI tuning driver for $(uname -r)"
+else
+  printf '%s\n' "Installed WMI tuning driver for $(uname -r); service remains disabled"
+fi
