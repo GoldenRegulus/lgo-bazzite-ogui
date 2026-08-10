@@ -115,10 +115,7 @@ printf '%s\n' 'Administrator consent is required to install the bounded helpers.
 /usr/bin/sudo /usr/bin/bash "$KERNEL_INSTALLER"
 /usr/bin/sudo /usr/bin/systemctl restart polkit.service
 
-installed_battery_status=0
-"$HELPER_PATH" status >/dev/null || installed_battery_status=$?
-if [[ $installed_battery_status -ne 0 && $installed_battery_status -ne 4 ]] || \
-   ! "$CONTROLLER_PATH" status || \
+if ! "$HELPER_PATH" status || ! "$CONTROLLER_PATH" status || \
    [[ "$(/usr/bin/sha256sum "$BUNDLED_FAN" | /usr/bin/awk '{print $1}')" != \
       "$(/usr/bin/sha256sum "$FAN_PATH" | /usr/bin/awk '{print $1}')" ]]; then
   printf '%s\n' 'Installed helper verification failed.' >&2

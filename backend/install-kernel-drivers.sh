@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Install the exact-kernel HID and WMI tuning modules that the unprivileged
-# installer built. Restore WMI tuning when it was enabled before a kernel
-# update. A first installation leaves it disabled. Preserve the prior HID
-# service-enabled state.
+# installer built. The user has already selected backend installation and
+# approved administrator access, so activate and enable both modules.
 set -Eeuo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -66,20 +65,13 @@ systemctl reset-failed "$hid_unit" || true
 
 "$hid_package/scripts/install.sh"
 
-if [[ $hid_was_enabled -eq 1 ]]; then
-  "$hid_current/activate.sh"
-  systemctl enable "$hid_unit"
-fi
+"$hid_current/activate.sh"
+systemctl enable "$hid_unit"
 
 trap - ERR
-printf '%s\n' "Installed HID driver for $(uname -r)"
+printf '%s\n' "Installed and enabled HID driver for $(uname -r)"
 
 # -- WMI tuning driver --
-
-wmi_was_enabled=0
-if systemctl is-enabled --quiet "$wmi_unit"; then
-  wmi_was_enabled=1
-fi
 
 if [[ -f $wmi_state/active && -x $wmi_current/deactivate.sh ]]; then
   "$wmi_current/deactivate.sh" || fail 'WMI tuning deactivation failed'
@@ -89,11 +81,6 @@ systemctl reset-failed "$wmi_unit" || true
 
 "$wmi_package/scripts/install.sh"
 
-if [[ $wmi_was_enabled -eq 1 ]]; then
-  "$wmi_current/activate.sh"
-  systemctl enable "$wmi_unit"
-  printf '%s\n' "Restored the enabled WMI tuning driver for $(uname -r)."
-else
-  printf '%s\n' "Installed WMI tuning driver for $(uname -r)."
-  printf '%s\n' "The service is disabled. Use current/activate.sh for a controlled start."
-fi
+"$wmi_current/activate.sh"
+systemctl enable "$wmi_unit"
+printf '%s\n' "Installed and enabled WMI tuning driver for $(uname -r)."
