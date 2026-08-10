@@ -4,8 +4,8 @@
 
 --- a/drivers/hid/hid-lenovo-go.c
 +++ b/drivers/hid/hid-lenovo-go.c
-# Effect: Adds GoldenRegulus to the source copyright notice.
-# Why: The notice must identify the author of the project changes while it keeps the upstream notices.
+# Effect: Credits GoldenRegulus for the added code.
+# Why: The upstream notice does not identify the author of these changes.
 @@ -4,6 +4,7 @@
   *
   *  Copyright (c) 2026 Derek J. Clark <derekjohn.clark@gmail.com>
@@ -14,8 +14,8 @@
   */
  
  #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-# Effect: Includes the spinlock API for the synchronous command state.
-# Why: The HID input callback and the waiting process can update that state concurrently. The spinlock API supplies the IRQ-safe lock used by both paths.
+# Effect: Includes the spinlock API.
+# Why: The reply callback and timeout path can update the same command state at the same time.
 @@ -21,6 +22,7 @@
  #include <linux/led-class-multicolor.h>
  #include <linux/mutex.h>
@@ -24,12 +24,8 @@
  #include <linux/sysfs.h>
  #include <linux/types.h>
  #include <linux/unaligned.h>
-# Effect: Names input report `0x04`. Adds one global synchronous-command record with a completion, IRQ-safe lock, pending flag, reply selectors, and result.
-#   Adds validated calibration-result and field-reference types. Removes the unqualified completion from configuration state.
-#   Adds a separate 16-bit firmware-error field for each left-controller calibration module.
-# Why: A reply has no sequence number. The driver can own only one request and must match its command and sub-command before it wakes that request.
-#   The lock makes reply, timeout, and interruption updates atomic. The result field carries the matched event-handler error to the sender.
-#   Calibration data must be validated before state changes. Status and error must stay paired with the selected controller and module.
+# Effect: Adds pending-command state and per-control calibration results.
+# Why: Replies have no sequence number, so the driver must match one command and sub-command. Each calibration control also needs its own status and error.
 @@ -31,23 +33,53 @@
  #include "hid-ids.h"
  
@@ -85,8 +81,8 @@
  	u32 gp_left_version_firmware;
  	u8 gp_left_version_gen;
  	u32 gp_left_version_hardware;
-# Effect: Adds a separate 16-bit firmware-error field for each right-controller calibration module.
-# Why: One completion applies to one controller and one module. Separate fields preserve the trigger, joystick, and gyro results independently.
+# Effect: Adds separate right-controller calibration errors.
+# Why: A result for one control must not replace the error for another control.
 @@ -56,10 +88,13 @@
  	u8 gp_mode;
  	u8 gp_right_auto_sleep_time;
@@ -101,16 +97,8 @@
  	u32 gp_right_version_firmware;
  	u8 gp_right_version_gen;
  	u32 gp_right_version_hardware;
-# Effect: Adds an exact calibration-completion decoder. It checks report ID, data group, command, sub-command, controller, module, and Boolean firmware status.
-#   It converts firmware status to the driver status values and reads the unaligned little-endian 16-bit error.
-#   Adds command arm, consume, and finish helpers under one IRQ-safe spinlock. Arm reinitializes completion before publication. Consume accepts only the pending selectors.
-#   Finish makes the lock winner authoritative: it returns a matched handler result, an interrupt error, or `-ETIMEDOUT`, and clears an unmatched pending request.
-#   Adds one report builder. It validates the data pointer and length, clears all 64 bytes, uses the four-byte FPS DPI frame, and uses the five-byte device frame otherwise.
-#   Adds one sender that accepts only an exact 64-byte HID write, preserves negative transport errors, and maps a positive short write to `-EIO`.
-# Why: Malformed calibration input must not update state. Packed firmware fields cannot be read through an aligned native pointer.
-#   Firmware has no sequence token. Completion, timeout, and interruption must arbitrate one pending selector pair without a stale completion escaping into the next request.
-#   FPS DPI omits the device byte, unlike the other commands. Every report must contain defined padding and must not read a null payload.
-#   A nonnegative HID return is not sufficient. Firmware receives one complete fixed-size packet only when all 64 bytes were written.
+# Effect: Adds report validation, command matching, packet construction, and full-write checks.
+# Why: Malformed replies must not change state. A write succeeds only when HID accepts all 64 bytes.
 @@ -330,6 +365,106 @@
  	[WINDOWS] = "windows",
  	[LINUX] = "linux",
@@ -218,8 +206,8 @@
  
  static int hid_go_version_event(struct command_report *cmd_rep)
  {
-# Effect: Replaces direct status writes with one selector helper. It returns pointers to the status and error fields for each valid controller and module and rejects all other selectors.
-# Why: Completion handling and sysfs reads must use the same controller-to-field map. Returning both pointers keeps each status paired with its firmware error.
+# Effect: Uses one lookup for calibration status and error fields.
+# Why: Read and completion paths must use the same controller and control mapping.
 @@ -575,35 +710,42 @@
  	}
  }
@@ -280,9 +268,8 @@
  		default:
  			return -EINVAL;
  		}
-# Effect: Decodes and validates a calibration completion, selects its controller and module fields, and stores both the 16-bit firmware error and normalized status with `WRITE_ONCE()`.
-# Why: HID submission reports transport delivery, not final calibration. The later input report supplies the firmware result.
-#   The input callback writes while sysfs can read without the configuration mutex. `WRITE_ONCE()` prevents unsynchronized compiler-generated repeated or merged field accesses.
+# Effect: Stores the decoded calibration status and firmware error.
+# Why: HID submission does not show whether firmware later completed calibration.
 @@ -611,8 +753,24 @@
  	default:
  		return -EINVAL;
@@ -308,9 +295,8 @@
  static int hid_go_os_mode_cfg_event(struct command_report *cmd_rep)
  {
  	switch (cmd_rep->sub_cmd) {
-# Effect: Adds report-ID and active-device checks before existing endpoint decoding. The active pointer is read once.
-# Why: Several matched HID interfaces can deliver 64-byte reports. Only report `0x04` from the published configuration device can update configuration state or own a command reply.
-#   `READ_ONCE()` makes the concurrent probe or removal pointer check one defined access.
+# Effect: Accepts replies only from the active configuration interface and report `0x04`.
+# Why: Reports from another matched interface must not release a command waiter.
 @@ -656,6 +814,10 @@
  
  	if (size != GO_PACKET_SIZE)
@@ -322,8 +308,8 @@
  
  	ep = get_endpoint_address(hdev);
  	if (ep != GO_GP_INTF_IN)
-# Effect: Offers the decoded command, sub-command, and event-handler result to the command matcher instead of completing every waiter.
-# Why: Unrelated firmware reports can arrive during a synchronous request. Only the pending selector pair can wake it, and the caller must receive that matched report's parse or firmware error.
+# Effect: Completes only the pending command and sub-command.
+# Why: Other firmware replies can arrive while a command waits.
 @@ -707,7 +869,7 @@
  	dev_dbg(&hdev->dev, "Rx data as raw input report: [%*ph]\n",
  		GO_PACKET_SIZE, data);
@@ -333,13 +319,8 @@
  	return ret;
  
  passthrough:
-# Effect: Keeps the configuration mutex across each complete transaction and rejects a null or stale HID device. Uses `kmalloc()` and the full-buffer report builder.
-#   Sends trigger, joystick, and gyro calibration commands once and returns the exact transport result without arming a synchronous waiter.
-#   For other commands, arms the selector before output, cancels pending state on output failure, waits 50 ms, and returns the matched handler result, interruption, timeout, or short-write error.
-# Why: The firmware has no sequence token, so synchronous transactions cannot overlap. A stale sysfs caller must not send through a removed or replacement device.
-#   The builder clears the complete fixed-size packet with `memset()`. `kzalloc()` would clear it twice; `kmalloc()` is safe because no byte is used before the builder clears all 64 bytes.
-#   A fast reply can arrive during output, so ownership must be armed first. Calibration completion is asynchronous and can take seconds, so the 50 ms synchronous wait is not valid for those commands.
-#   The old path discarded successful reply-handler errors and interruption results, returned success after timeout, and classified a short write as `-EINVAL`.
+# Effect: Builds one report, sends calibration without waiting, and matches replies for other commands.
+# Why: Calibration completes asynchronously. The builder clears all 64 bytes, so `kmalloc()` avoids the second clear that `kzalloc()` would perform. Arming before output also catches a fast reply.
 @@ -720,42 +882,37 @@
  			    u8 index, enum dev_type device, u8 *data, size_t len)
  {
@@ -402,8 +383,8 @@
  }
  
  static ssize_t version_show(struct device *dev, struct device_attribute *attr,
-# Effect: Rejects the matched zero-index sentinel for enabled-state controls while preserving negative parser errors and valid nonzero selections.
-# Why: These commands require one defined state byte. The old zero path later changed the payload length to zero and sent no state value.
+# Effect: Rejects zero for enabled-state controls.
+# Why: These commands require one defined state byte; zero previously produced an empty payload.
 @@ -902,6 +1059,8 @@
  	case FEATURE_LIGHT_ENABLE:
  	case FEATURE_TOUCHPAD_ENABLE:
@@ -413,8 +394,8 @@
  		val = ret;
  		break;
  	case FEATURE_AUTO_SLEEP_TIME:
-# Effect: Rejects the matched zero-index sentinel for gamepad mode while preserving negative parser errors and valid nonzero modes.
-# Why: The firmware mode table starts at the nonzero named entries. Zero later produced an empty payload and selected no mode.
+# Effect: Rejects zero for gamepad mode.
+# Why: Zero is not a named firmware mode and previously produced an empty payload.
 @@ -918,6 +1077,8 @@
  		break;
  	case FEATURE_GAMEPAD_MODE:
@@ -424,8 +405,8 @@
  		val = ret;
  		break;
  	default:
-# Effect: Rejects the matched zero-index rumble sentinel and always keeps the one-byte payload for accepted modes.
-# Why: Firmware requires one named rumble-mode byte. Converting zero to a zero-length payload could report a write without selecting a mode.
+# Effect: Rejects zero for rumble mode.
+# Why: Firmware requires one named mode byte; an empty payload selects no mode.
 @@ -1112,9 +1273,8 @@
  
  	if (ret < 0)
@@ -438,9 +419,8 @@
  
  	ret = mcu_property_out(drvdata.hdev, MCU_CONFIG_DATA, SET_MOTOR_CFG,
  			       index, device_type, &val, size);
-# Effect: Accepts only the calibration-status index, uses the shared selector helper, reads the selected status once, validates its text-table index, and emits that text.
-# Why: The read path must use the same controller and module mapping as the completion path. `READ_ONCE()` is required because the input callback updates status without the sysfs mutex.
-#   A bad selector or stored value must return an error instead of indexing outside the status text table.
+# Effect: Uses the shared calibration lookup for status reads.
+# Why: Sysfs must read the same field that completion handling updates.
 @@ -1289,53 +1449,20 @@
  				  enum dev_type device_type,
  				  enum cal_device_type cal_type)
@@ -505,13 +485,8 @@
  }
  
  static ssize_t calibrate_config_store(struct device *dev,
-# Effect: Rejects the zero action sentinel and sends one byte for accepted Start or Stop actions. Maps each accepted calibration command to one module and rejects other commands.
-#   Before Start only, clears that module's old error and sets its status to unknown with `WRITE_ONCE()`. Stop does not erase the last result.
-#   Keeps calibration submission asynchronous and returns the HID transport error or the sysfs byte count.
-#   Adds a common error reader that validates controller and module selectors, reads once, and emits a fixed-width hexadecimal 16-bit value.
-# Why: Start and Stop are explicit one-byte firmware actions. A command-to-module map is required before the driver can reset the correct result.
-#   A new Start must not expose the previous run as its result. Stop is cancellation and must not pretend that a new run started.
-#   Completion arrives later through input, so status and error have unsynchronized readers and writers. Userspace needs the firmware error separately from success or failure status.
+# Effect: Validates calibration actions, clears old Start results, and exposes firmware errors.
+# Why: A new Start must not show the previous result. Userspace also needs the firmware error after asynchronous completion.
 @@ -1343,24 +1470,58 @@
  				      const char *buf, u8 cmd, u8 sub_cmd,
  				      size_t count, enum dev_type device_type)
@@ -575,8 +550,8 @@
  }
  
  static ssize_t calibrate_config_options(struct device *dev,
-# Effect: Returns `-EINVAL` for the matched zero-index OS-mode sentinel and preserves negative parser errors.
-# Why: Zero is a table placeholder, not a firmware mode. Returning zero from sysfs store would falsely report a successful zero-byte write.
+# Effect: Returns `-EINVAL` for zero OS mode.
+# Why: Zero is a table placeholder, not a firmware mode.
 @@ -1387,7 +1548,7 @@
  
  	ret = sysfs_match_string(os_mode_text, buf);
@@ -586,8 +561,8 @@
  
  	val = ret;
  	ret = mcu_property_out(drvdata.hdev, OS_MODE_DATA, FEATURE_OS_MODE,
-# Effect: Returns `-EINVAL` for the matched zero-index RGB-mode sentinel and preserves negative parser errors.
-# Why: Zero is a table placeholder, not a firmware RGB mode. It must not reach report construction or appear as a successful zero-byte sysfs write.
+# Effect: Returns `-EINVAL` for zero RGB mode.
+# Why: Zero is a table placeholder, not a firmware mode.
 @@ -1585,7 +1746,7 @@
  
  	ret = sysfs_match_string(rgb_mode_text, buf);
@@ -597,8 +572,8 @@
  
  	val = ret;
  
-# Effect: Passes the calibration command first and its Start or Stop sub-command second to the common store helper.
-# Why: The helper switches on the command to select a module and sends the action as the report index. The old reversed arguments rejected valid requests and would frame the two selectors in the wrong fields.
+# Effect: Passes the calibration command before the action sub-command.
+# Why: The old order treated Start or Stop as a command and rejected the request before USB submission.
 @@ -1750,8 +1911,8 @@
  				     struct device_attribute *attr,           \
  				     const char *buf, size_t count)           \
@@ -610,8 +585,8 @@
  	}                                                                     \
  	static ssize_t _name##_##_rtype##_show(                               \
  		struct device *dev, struct device_attribute *attr, char *buf) \
-# Effect: Adds a macro that creates one read-only named calibration-error attribute and binds its show function to fixed controller and module selectors.
-# Why: All six files use the same validated formatter. Compile-time macro arguments keep each public file tied to its intended result field without duplicate show functions.
+# Effect: Adds a common calibration-error attribute macro.
+# Why: The six files use one formatter and differ only by controller and control.
 @@ -1769,6 +1930,14 @@
  	}                                                                     \
  	static DEVICE_ATTR_RO_NAMED(_name, _attrname)
@@ -627,8 +602,8 @@
  /* Gamepad - MCU */
  static struct go_cfg_attr version_product_mcu = { PRODUCT_VERSION };
  LEGO_DEVICE_ATTR_RO(version_product_mcu, "product_version", USB_MCU, version);
-# Effect: Defines read-only left trigger, joystick, and gyro calibration-error attributes with their exact controller and module selectors.
-# Why: Status gives only unknown, success, or failure. Each module needs a separate file for its 16-bit firmware error.
+# Effect: Defines left trigger, joystick, and gyro error files.
+# Why: Calibration status alone does not identify the firmware failure.
 @@ -1938,6 +2107,13 @@
  LEGO_DEVICE_STATUS_ATTR(cal_gyro_left_status, "calibrate_gyro_status",
  			LEFT_CONTROLLER, CALDEV_GYROSCOPE);
@@ -643,8 +618,8 @@
  static struct attribute *left_gamepad_attrs[] = {
  	&dev_attr_auto_sleep_time_left.attr,
  	&dev_attr_auto_sleep_time_left_range.attr,
-# Effect: Publishes all three left calibration-error attributes in the left gamepad sysfs group.
-# Why: A defined device attribute is not visible until its attribute pointer is in the group created for the configuration device.
+# Effect: Publishes the left calibration-error files.
+# Why: A defined sysfs attribute does not exist until its device group includes it.
 @@ -1950,6 +2126,9 @@
  	&dev_attr_cal_trigg_left.attr,
  	&dev_attr_cal_trigg_left_index.attr,
@@ -655,8 +630,8 @@
  	&dev_attr_imu_bypass_left.attr,
  	&dev_attr_imu_bypass_left_index.attr,
  	&dev_attr_imu_enabled_left.attr,
-# Effect: Binds right `imu_enabled` to `FEATURE_IMU_ENABLE` and binds right `reset` to `RIGHT_CONTROLLER`.
-# Why: The previous selectors addressed IMU bypass and the left controller. A sysfs write must select the feature and controller named by its file.
+# Effect: Uses the right IMU-enable selector and sends reset to the right controller.
+# Why: The old selectors changed IMU bypass and reset the left controller instead.
 @@ -1999,13 +2178,13 @@
  		    index, feature_status);
  static DEVICE_ATTR_RO_NAMED(imu_bypass_right_index, "imu_bypass_enabled_index");
@@ -673,8 +648,8 @@
  
  static struct go_cfg_attr rumble_mode_right = { RUMBLE_MODE };
  LEGO_DEVICE_ATTR_RW(rumble_mode_right, "rumble_mode", RIGHT_CONTROLLER, index,
-# Effect: Defines read-only right trigger, joystick, and gyro calibration-error attributes with their exact controller and module selectors.
-# Why: Status gives only unknown, success, or failure. Each module needs a separate file for its 16-bit firmware error.
+# Effect: Defines right trigger, joystick, and gyro error files.
+# Why: Calibration status alone does not identify the firmware failure.
 @@ -2045,6 +2224,15 @@
  LEGO_DEVICE_STATUS_ATTR(cal_gyro_right_status, "calibrate_gyro_status",
  			RIGHT_CONTROLLER, CALDEV_GYROSCOPE);
@@ -691,8 +666,8 @@
  static struct attribute *right_gamepad_attrs[] = {
  	&dev_attr_auto_sleep_time_right.attr,
  	&dev_attr_auto_sleep_time_right_range.attr,
-# Effect: Publishes all three right calibration-error attributes in the right gamepad sysfs group.
-# Why: A defined device attribute is not visible until its attribute pointer is in the group created for the configuration device.
+# Effect: Publishes the right calibration-error files.
+# Why: A defined sysfs attribute does not exist until its device group includes it.
 @@ -2057,6 +2245,9 @@
  	&dev_attr_cal_trigg_right.attr,
  	&dev_attr_cal_trigg_right_index.attr,
@@ -703,11 +678,8 @@
  	&dev_attr_imu_bypass_right.attr,
  	&dev_attr_imu_bypass_right_index.attr,
  	&dev_attr_imu_enabled_right.attr,
-# Effect: Initializes the configuration mutex, completion, spinlock, pending state, and LED pointer before publishing the active HID pointer with `WRITE_ONCE()`.
-#   Converts direct probe returns to reverse cleanup paths. Uses an explicitly created RGB sysfs group instead of a device-managed group.
-# Why: Raw input can run after the active pointer is published, and sysfs can run after groups are created. Neither path may observe uninitialized command or LED state.
-#   Probe can fail after top-level sysfs or LED registration. Each later failure must remove earlier resources.
-#   The RGB group needs explicit removal before explicit LED unregister during failure and normal removal; the non-devm group API gives the driver that teardown order.
+# Effect: Initializes shared state before publishing sysfs and adds probe cleanup.
+# Why: Callbacks must not see uninitialized state, and failed probe must remove resources already published.
 @@ -2363,33 +2554,34 @@
  		return -ENOMEM;
  
@@ -752,9 +724,8 @@
  	/* Executing calls prior to returning from probe will lock the MCU. Schedule
  	 * initial data call after probe has completed and MCU can accept calls.
  	 */
-# Effect: Converts delayed-work scheduling failure to `-ENODEV` and unwinds the RGB group, LED registration, top-level groups, active HID pointer, and HID driver data in reverse order.
-#   Each label starts after the last resource that exists on that failure path.
-# Why: Failed probe must not leave published sysfs files or a registered LED. Clearing both pointers prevents raw input and later teardown from using a configuration instance that did not finish probe.
+# Effect: Unwinds each resource when delayed-work setup fails.
+# Why: That failure occurs after sysfs and LED resources are visible.
 @@ -2398,9 +2590,21 @@
  	if (!ret) {
  		dev_err(&hdev->dev,
@@ -778,10 +749,8 @@
  }
  
  static void hid_go_cfg_remove(struct hid_device *hdev)
-# Effect: Cancels startup work, removes top-level and RGB sysfs files, and unregisters the LED before hardware shutdown.
-#   Then takes the configuration mutex, clears the active HID pointer with `WRITE_ONCE()`, closes and stops HID, and clears HID driver data.
-# Why: Work, sysfs, and LED callbacks are command sources. Removal must stop and drain them before it closes hardware.
-#   The same mutex waits for an in-flight configuration transaction and prevents a new one. Clearing the published pointer makes later raw input and stale callers reject the device.
+# Effect: Removes sysfs and LED resources before HID shutdown.
+# Why: A callback must not use hardware after removal starts.
 @@ -2413,9 +2617,12 @@
  	 * a stale drvdata.hdev pointer.
  	 */
@@ -796,8 +765,8 @@
  	hid_hw_close(hdev);
  	hid_hw_stop(hdev);
  	hid_set_drvdata(hdev, NULL);
-# Effect: On configuration-probe failure, reports the error, closes the opened HID device, stops the started HID hardware, and returns the error instead of continuing probe.
-# Why: The outer probe owns the start and open operations. The inner cleanup cannot release them. Continuing would bind a partly initialized driver; returning without close and stop would leak transport resources.
+# Effect: Closes and stops HID after configuration-probe failure.
+# Why: The outer probe has already opened and started the device.
 @@ -2456,8 +2663,12 @@
  	}
  
@@ -812,8 +781,8 @@
  
  	dev_dbg(&hdev->dev, "Started Legion Go HID Device: %x\n", ep);
  
-# Effect: Adds GoldenRegulus to module author metadata and keeps the upstream author.
-# Why: Module metadata must identify both the original driver author and the author of the project changes.
+# Effect: Adds GoldenRegulus to module authorship.
+# Why: The existing metadata names only the upstream author.
 @@ -2505,5 +2716,6 @@
  module_hid_driver(hid_lenovo_go);
  
