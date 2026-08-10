@@ -1,9 +1,10 @@
 # Annotated unified diff for drivers/hid-lenovo-go/hid-lenovo-go.c.
 # Base: the selected OGC5 hid-lenovo-go.c source.
-# Review artifact; do not apply as a patch. Each Why comment applies to the next hunk.
+# Review artifact; do not apply as a patch. Each Effect and Why comment applies to the next hunk.
 
 --- a/drivers/hid/hid-lenovo-go.c
 +++ b/drivers/hid/hid-lenovo-go.c
+# Effect: Credits GoldenRegulus for project changes in a source file that already credits its upstream authors.
 # Why: The upstream file already has copyright and module-author notices.
 @@ -4,6 +4,7 @@
   *
@@ -13,6 +14,7 @@
   */
  
  #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+# Effect: Adds the lock type used to protect the one pending synchronous command while raw input receives replies.
 # Why: Reply-state updates run in the raw HID event path.
 @@ -21,6 +22,7 @@
  #include <linux/led-class-multicolor.h>
@@ -22,6 +24,7 @@
  #include <linux/sysfs.h>
  #include <linux/types.h>
  #include <linux/unaligned.h>
+# Effect: Adds request state, calibration result structures, error fields, and helpers for bounded 64-byte output reports.
 # Why: A synchronous reply must match its request, and calibration completion needs result and error storage.
 @@ -31,23 +33,53 @@
  #include "hid-ids.h"
@@ -78,6 +81,7 @@
  	u32 gp_left_version_firmware;
  	u8 gp_left_version_gen;
  	u32 gp_left_version_hardware;
+# Effect: Stores a separate 16-bit firmware error for each right-controller calibration control.
 # Why: Each supported calibration control needs its own firmware-error readback.
 @@ -56,10 +88,13 @@
  	u8 gp_mode;
@@ -93,6 +97,7 @@
  	u32 gp_right_version_firmware;
  	u8 gp_right_version_gen;
  	u32 gp_right_version_hardware;
+# Effect: Adds validation for completion reports, request arm/consume/finish helpers, and output-report construction.
 # Why: Firmware completion is asynchronous; transport must validate report framing and short writes.
 @@ -330,6 +365,106 @@
  	[WINDOWS] = "windows",
@@ -201,6 +206,7 @@
  
  static int hid_go_version_event(struct command_report *cmd_rep)
  {
+# Effect: Uses one lookup to find the status and error fields for a selected controller and calibration module.
 # Why: One helper prevents mismatched status and error attributes.
 @@ -575,35 +710,42 @@
  	}
@@ -262,6 +268,7 @@
  		default:
  			return -EINVAL;
  		}
+# Effect: Writes decoded completion status and error to the selected fields after a valid firmware completion report.
 # Why: Userspace reads firmware result rather than assuming a submitted request succeeded.
 @@ -611,8 +753,24 @@
  	default:
@@ -288,6 +295,7 @@
  static int hid_go_os_mode_cfg_event(struct command_report *cmd_rep)
  {
  	switch (cmd_rep->sub_cmd) {
+# Effect: Accepts configuration replies only from the active configuration HID interface and report type.
 # Why: Unrelated input reports must not complete a configuration request.
 @@ -656,6 +814,10 @@
  
@@ -300,6 +308,7 @@
  
  	ep = get_endpoint_address(hdev);
  	if (ep != GO_GP_INTF_IN)
+# Effect: Completes a waiter only when the received command and sub-command match the armed request.
 # Why: A generic completion could accept an unrelated reply.
 @@ -707,7 +869,7 @@
  	dev_dbg(&hdev->dev, "Rx data as raw input report: [%*ph]\n",
@@ -310,6 +319,7 @@
  	return ret;
  
  passthrough:
+# Effect: Sends calibration commands once without waiting; other commands arm a matching waiter and return its result or timeout.
 # Why: The firmware has no sequence token, and calibration completion is not a synchronous transport acknowledgement.
 @@ -720,42 +882,37 @@
  			    u8 index, enum dev_type device, u8 *data, size_t len)
@@ -373,6 +383,7 @@
  }
  
  static ssize_t version_show(struct device *dev, struct device_attribute *attr,
+# Effect: Rejects zero for feature controls whose accepted text starts at the first named enabled value.
 # Why: These firmware controls have a defined nonzero accepted set.
 @@ -902,6 +1059,8 @@
  	case FEATURE_LIGHT_ENABLE:
@@ -383,6 +394,7 @@
  		val = ret;
  		break;
  	case FEATURE_AUTO_SLEEP_TIME:
+# Effect: Rejects zero for gamepad mode instead of sending an empty mode request.
 # Why: Mode zero must not become an empty firmware request.
 @@ -918,6 +1077,8 @@
  		break;
@@ -393,6 +405,7 @@
  		val = ret;
  		break;
  	default:
+# Effect: Rejects zero for rumble mode instead of sending an empty configuration request.
 # Why: The driver must send only defined values.
 @@ -1112,9 +1273,8 @@
  
@@ -406,6 +419,7 @@
  
  	ret = mcu_property_out(drvdata.hdev, MCU_CONFIG_DATA, SET_MOTOR_CFG,
  			       index, device_type, &val, size);
+# Effect: Reads calibration status through the shared status-and-error lookup instead of repeating device switches.
 # Why: Status and error must address the same device and control.
 @@ -1289,53 +1449,20 @@
  				  enum dev_type device_type,
@@ -471,6 +485,7 @@
  }
  
  static ssize_t calibrate_config_store(struct device *dev,
+# Effect: Sets a calibration result to unknown and clears its error before Start; adds a read-only error formatter.
 # Why: A new operation must not display a prior completion as its own result.
 @@ -1343,24 +1470,58 @@
  				      const char *buf, u8 cmd, u8 sub_cmd,
@@ -535,6 +550,7 @@
  }
  
  static ssize_t calibrate_config_options(struct device *dev,
+# Effect: Treats zero OS mode as invalid while still returning errors from the upstream parser.
 # Why: The interface accepts only named modes.
 @@ -1387,7 +1548,7 @@
  
@@ -545,6 +561,7 @@
  
  	val = ret;
  	ret = mcu_property_out(drvdata.hdev, OS_MODE_DATA, FEATURE_OS_MODE,
+# Effect: Treats zero RGB mode as invalid while still returning errors from the upstream parser.
 # Why: The interface accepts only named modes.
 @@ -1585,7 +1746,7 @@
  
@@ -555,6 +572,7 @@
  
  	val = ret;
  
+# Effect: Passes the firmware calibration command before its action sub-command to the common store function.
 # Why: The prior argument order caused valid calibration requests to be rejected before USB submission.
 @@ -1750,8 +1911,8 @@
  				     struct device_attribute *attr,           \
@@ -567,6 +585,7 @@
  	}                                                                     \
  	static ssize_t _name##_##_rtype##_show(                               \
  		struct device *dev, struct device_attribute *attr, char *buf) \
+# Effect: Defines a reusable macro for read-only calibration-error sysfs attributes.
 # Why: The backend needs the firmware error for each completed control.
 @@ -1769,6 +1930,14 @@
  	}                                                                     \
@@ -583,6 +602,7 @@
  /* Gamepad - MCU */
  static struct go_cfg_attr version_product_mcu = { PRODUCT_VERSION };
  LEGO_DEVICE_ATTR_RO(version_product_mcu, "product_version", USB_MCU, version);
+# Effect: Creates left-controller error attributes for trigger, joystick, and gyro calibration.
 # Why: Expose the decoded error state for left joystick, trigger, and gyro calibration.
 @@ -1938,6 +2107,13 @@
  LEGO_DEVICE_STATUS_ATTR(cal_gyro_left_status, "calibrate_gyro_status",
@@ -598,6 +618,7 @@
  static struct attribute *left_gamepad_attrs[] = {
  	&dev_attr_auto_sleep_time_left.attr,
  	&dev_attr_auto_sleep_time_left_range.attr,
+# Effect: Adds the left-controller error attributes to the published sysfs group.
 # Why: Defined attributes must be part of the device group.
 @@ -1950,6 +2126,9 @@
  	&dev_attr_cal_trigg_left.attr,
@@ -609,6 +630,7 @@
  	&dev_attr_imu_bypass_left.attr,
  	&dev_attr_imu_bypass_left_index.attr,
  	&dev_attr_imu_enabled_left.attr,
+# Effect: Uses the right IMU-enable selector and sends reset to the right controller instead of the left controller.
 # Why: Each sysfs attribute must address the intended controller firmware control.
 @@ -1999,13 +2178,13 @@
  		    index, feature_status);
@@ -626,6 +648,7 @@
  
  static struct go_cfg_attr rumble_mode_right = { RUMBLE_MODE };
  LEGO_DEVICE_ATTR_RW(rumble_mode_right, "rumble_mode", RIGHT_CONTROLLER, index,
+# Effect: Creates right-controller error attributes for trigger, joystick, and gyro calibration.
 # Why: Expose the decoded error state for right joystick, trigger, and gyro calibration.
 @@ -2045,6 +2224,15 @@
  LEGO_DEVICE_STATUS_ATTR(cal_gyro_right_status, "calibrate_gyro_status",
@@ -643,6 +666,7 @@
  static struct attribute *right_gamepad_attrs[] = {
  	&dev_attr_auto_sleep_time_right.attr,
  	&dev_attr_auto_sleep_time_right_range.attr,
+# Effect: Adds the right-controller error attributes to the published sysfs group.
 # Why: Defined attributes must be part of the device group.
 @@ -2057,6 +2245,9 @@
  	&dev_attr_cal_trigg_right.attr,
@@ -654,6 +678,7 @@
  	&dev_attr_imu_bypass_right.attr,
  	&dev_attr_imu_bypass_right_index.attr,
  	&dev_attr_imu_enabled_right.attr,
+# Effect: Initializes command and LED state before publishing sysfs, then unwinds each resource if probe fails.
 # Why: Failed probe and later removal must not leave sysfs groups, LED state, or a stale HID pointer.
 @@ -2363,33 +2554,34 @@
  		return -ENOMEM;
@@ -699,6 +724,7 @@
  	/* Executing calls prior to returning from probe will lock the MCU. Schedule
  	 * initial data call after probe has completed and MCU can accept calls.
  	 */
+# Effect: Removes the RGB group, unregisters the LED, removes sysfs groups, and clears the HID pointer after delayed-work setup failure.
 # Why: A partially initialized driver must release every published resource.
 @@ -2398,9 +2590,21 @@
  	if (!ret) {
@@ -723,6 +749,7 @@
  }
  
  static void hid_go_cfg_remove(struct hid_device *hdev)
+# Effect: Removes sysfs and LED resources before the HID device stops, then clears the active HID pointer under the configuration lock.
 # Why: Linux must not retain attributes or LED ownership after driver removal.
 @@ -2413,9 +2617,12 @@
  	 * a stale drvdata.hdev pointer.
@@ -738,6 +765,7 @@
  	hid_hw_close(hdev);
  	hid_hw_stop(hdev);
  	hid_set_drvdata(hdev, NULL);
+# Effect: Closes and stops the HID hardware when configuration probe fails.
 # Why: A failed configuration interface must not leave hardware started.
 @@ -2456,8 +2663,12 @@
  	}
@@ -753,6 +781,7 @@
  
  	dev_dbg(&hdev->dev, "Started Legion Go HID Device: %x\n", ep);
  
+# Effect: Credits GoldenRegulus in module metadata while retaining the upstream module author.
 # Why: The upstream module already declares its authors.
 @@ -2505,5 +2716,6 @@
  module_hid_driver(hid_lenovo_go);
