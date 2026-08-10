@@ -26,8 +26,8 @@ The driver exposes current firmware state and sends requested transport operatio
 ## Files
 
 The complete modified owner source is `wmi-other.c`. See the
-[kernel change record](CHANGES.md) and [annotated unified diff](ANNOTATED-DIFF.patch)
-for each project edit and its rationale.
+[annotated unified diff](ANNOTATED-DIFF.patch) for each project edit and its
+rationale.
 
 ## Check the source
 
